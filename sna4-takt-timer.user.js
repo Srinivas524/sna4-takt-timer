@@ -1,16 +1,59 @@
 // ==UserScript==
 // @name         SNA4 Takt Time Study Timer
 // @namespace    http://tampermonkey.net/
-// @version      8.0
-// @description  Floating time study timer with associate management and process path selection
-// @match        https://fclm-portal.amazon.com/*
-// @grant        none
+// @version      9.0
+// @description  Floating time study timer with associate management and Google Sheets sync
+// @match        https://ramdos.org/*
+// @grant        GM_xmlhttpRequest
+// @connect      script.google.com
+// @connect      script.googleusercontent.com
 // @updateURL    https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js
 // @downloadURL  https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js
 // ==/UserScript==
 
 (function () {
   'use strict';
+
+  // ═══════════════════════════════════════════════════════
+  // GOOGLE SHEETS API
+  // ═══════════════════════════════════════════════════════
+  const API_URL = 'https://script.google.com/macros/s/AKfycbxVHsKAFccb80Pl6FhOsuMTcAEwZACFVPlxgwjb56UueO-_F_Q6xe-pYqJsOy4UUxni/exec';
+
+  function callAPI(payload) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: API_URL,
+        headers: { 'Content-Type': 'text/plain' },
+        data: JSON.stringify(payload),
+        onload: (res) => {
+          try {
+            resolve(JSON.parse(res.responseText));
+          } catch (e) {
+            reject(e);
+          }
+        },
+        onerror: (err) => reject(err)
+      });
+    });
+  }
+
+  function fetchAPI(action) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: API_URL + '?action=' + action,
+        onload: (res) => {
+          try {
+            resolve(JSON.parse(res.responseText));
+          } catch (e) {
+            reject(e);
+          }
+        },
+        onerror: (err) => reject(err)
+      });
+    });
+  }
 
   // ═══════════════════════════════════════════════════════
   // PROCESS PATH CONFIGURATION
@@ -21,8 +64,7 @@
       { name: "Move item from bin to cage", target: move },
       { name: "Drive time from bin to bin", target: drive }
     ];
-    const totalTarget = locate + move + drive;
-    return { tasks, totalTarget };
+    return { tasks, totalTarget: locate + move + drive };
   }
 
   function buildPackTasks(t1, t2, t3, t4, t5, t6, t7, t8, t9) {
@@ -37,8 +79,7 @@
       { name: "Scan / add SPOO", target: t8 },
       { name: "Push item onto conveyor", target: t9 }
     ];
-    const totalTarget = t1 + t2 + t3 + t4 + t5 + t6 + t7 + t8 + t9;
-    return { tasks, totalTarget };
+    return { tasks, totalTarget: t1+t2+t3+t4+t5+t6+t7+t8+t9 };
   }
 
   function buildStowTasks(stowToStow, cageChangeover) {
@@ -46,8 +87,7 @@
       { name: "Stow to stow", target: stowToStow },
       { name: "Cage change over", target: cageChangeover }
     ];
-    const totalTarget = stowToStow + cageChangeover;
-    return { tasks, totalTarget };
+    return { tasks, totalTarget: stowToStow + cageChangeover };
   }
 
   const NUM_OBS = 5;
@@ -61,9 +101,9 @@
       "Multi": buildPickTasks(9, 9, 180)
     },
     "Pack": {
-      "Singles/VNA": buildPackTasks(0, 0, 0, 0, 0, 0, 0, 0, 0),
-      "Multies": buildPackTasks(0, 0, 0, 0, 0, 0, 0, 0, 0),
-      "BOD/Noncon": buildPackTasks(0, 0, 0, 0, 0, 0, 0, 0, 0)
+      "Singles/VNA": buildPackTasks(0,0,0,0,0,0,0,0,0),
+      "Multies": buildPackTasks(0,0,0,0,0,0,0,0,0),
+      "BOD/Noncon": buildPackTasks(0,0,0,0,0,0,0,0,0)
     },
     "Stow": {
       "_default": buildStowTasks(300, 480)
@@ -78,7 +118,7 @@
   // ═══════════════════════════════════════════════════════
   // DATA & STATE
   // ═══════════════════════════════════════════════════════
-  const STORAGE_KEY = 'sna4_takt_time_study_v8';
+  const STORAGE_KEY = 'sna4_takt_time_study_v9';
   const firstProcess = Object.keys(PROCESS_PATHS)[0];
   const firstSub = Object.keys(PROCESS_PATHS[firstProcess])[0];
 
@@ -102,19 +142,25 @@
     currentAssociateIndex: -1,
     showAssociateSearch: false,
     associateSearchQuery: '',
-    showAddForm: false
+    showAddForm: false,
+    syncStatus: 'idle', // idle | syncing | synced | error
+    lastSynced: null
   };
 
   // ═══════════════════════════════════════════════════════
-  // PERSISTENCE
+  // PERSISTENCE — LOCAL + SHEETS
   // ═══════════════════════════════════════════════════════
+
+  // Always save locally first (instant), then push to Sheets
   function saveData() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
-    } catch (e) { console.warn('Save failed:', e); }
+    } catch (e) { console.warn('Local save failed:', e); }
+    syncToSheets();
   }
 
   function loadData() {
+    // Load from local cache first (instant)
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
@@ -124,7 +170,83 @@
           state.currentAssociateIndex = 0;
         }
       }
-    } catch (e) { console.warn('Load failed:', e); }
+    } catch (e) { console.warn('Local load failed:', e); }
+
+    // Then try to get latest from Sheets (may override local)
+    syncFromSheets();
+  }
+
+  // Push full appData to Google Sheets
+  function syncToSheets() {
+    state.syncStatus = 'syncing';
+    updateSyncBadge();
+
+    callAPI({ action: 'saveAll', data: appData })
+      .then(() => {
+        state.syncStatus = 'synced';
+        state.lastSynced = new Date().toLocaleTimeString();
+        updateSyncBadge();
+      })
+      .catch((err) => {
+        console.warn('Sheets sync failed:', err);
+        state.syncStatus = 'error';
+        updateSyncBadge();
+      });
+  }
+
+  // Pull latest data from Google Sheets
+  function syncFromSheets() {
+    state.syncStatus = 'syncing';
+    updateSyncBadge();
+
+    fetchAPI('getAll')
+      .then((data) => {
+        if (data && data.auditorName !== undefined) {
+          // Merge sheet data — sheet is source of truth for associates
+          // but keep local auditor name if sheet is empty
+          if (data.associates && data.associates.length > 0) {
+            appData.associates = data.associates;
+          }
+          if (data.auditorName) appData.auditorName = data.auditorName;
+          if (data.auditorLogin) appData.auditorLogin = data.auditorLogin;
+
+          // Persist merged data locally
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+
+          if (appData.associates.length > 0 && state.currentAssociateIndex < 0) {
+            state.currentAssociateIndex = 0;
+          }
+        }
+        state.syncStatus = 'synced';
+        state.lastSynced = new Date().toLocaleTimeString();
+        updateSyncBadge();
+
+        // Re-render if panel is open
+        if (state.isOpen) renderPanel();
+      })
+      .catch((err) => {
+        console.warn('Sheets fetch failed:', err);
+        state.syncStatus = 'error';
+        updateSyncBadge();
+      });
+  }
+
+  function updateSyncBadge() {
+    const badge = document.getElementById('takt-sync-badge');
+    if (!badge) return;
+    if (state.syncStatus === 'syncing') {
+      badge.textContent = '⟳ Syncing...';
+      badge.style.background = '#fde68a';
+      badge.style.color = '#92400e';
+    } else if (state.syncStatus === 'synced') {
+      badge.textContent = `✓ Synced ${state.lastSynced || ''}`;
+      badge.style.background = '#dcfce7';
+      badge.style.color = '#16a34a';
+    } else if (state.syncStatus === 'error') {
+      badge.textContent = '⚠ Offline — local only';
+      badge.style.background = '#fee2e2';
+      badge.style.color = '#dc2626';
+    }
   }
 
   // ═══════════════════════════════════════════════════════
@@ -163,10 +285,21 @@
   }
 
   function addAssociate(name, login) {
+    // Check for duplicate login
+    const duplicate = appData.associates.find(a => a.login.toLowerCase() === login.trim().toLowerCase());
+    if (duplicate) {
+      showToast(`⚠ Login "${login.trim()}" already exists as ${duplicate.name}`);
+      return false;
+    }
+    // Warn if name matches auditor name
+    if (name.trim().toLowerCase() === appData.auditorName.toLowerCase() && appData.auditorName) {
+      showToast(`⚠ Warning: Associate name matches auditor name!`);
+    }
     const assoc = {
       id: Date.now(),
       name: name.trim(),
       login: login.trim(),
+      role: 'associate',
       coachingNotes: '',
       observationStore: {}
     };
@@ -176,6 +309,7 @@
     state.showAddForm = false;
     state.showAssociateSearch = false;
     saveData();
+    return true;
   }
 
   function navigateAssociate(direction) {
@@ -258,6 +392,22 @@
     }
     .takt-header-btn:hover { background: rgba(255,255,255,0.3); }
 
+    /* ── SYNC BAR ── */
+    .takt-sync-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 5px 24px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; flex-shrink: 0;
+    }
+    #takt-sync-badge {
+      padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 700;
+      font-family: 'Inter', sans-serif; transition: all 0.3s;
+    }
+    .takt-sync-refresh {
+      padding: 3px 10px; border-radius: 6px; border: 1.5px solid #e2e8f0;
+      background: white; color: #6366f1; font-size: 11px; font-weight: 700;
+      cursor: pointer; font-family: 'Inter', sans-serif; transition: all 0.2s;
+    }
+    .takt-sync-refresh:hover { background: #eef2ff; border-color: #6366f1; }
+
     /* ── AUDITOR BAR ── */
     .takt-auditor-bar {
       display: flex; align-items: center; gap: 16px; padding: 8px 24px;
@@ -294,8 +444,7 @@
     .takt-assoc-card {
       flex: 1; display: flex; align-items: center; gap: 12px;
       padding: 6px 16px; background: white; border-radius: 12px;
-      border: 2px solid #86efac; min-width: 0;
-      transition: all 0.3s ease;
+      border: 2px solid #86efac; min-width: 0; transition: all 0.3s ease;
     }
     .takt-assoc-avatar {
       width: 36px; height: 36px; border-radius: 10px;
@@ -409,6 +558,9 @@
     }
     .takt-add-field input:focus { border-color: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,0.15); }
     .takt-add-field input::placeholder { color: #cbd5e1; }
+    .takt-add-warn {
+      font-size: 11px; color: #d97706; font-weight: 600; margin-top: 4px; display: none;
+    }
     .takt-add-btns { display: flex; gap: 8px; margin-top: 20px; }
     .takt-add-btns button {
       flex: 1; padding: 11px; border-radius: 10px; font-size: 13px; font-weight: 700;
@@ -416,9 +568,7 @@
     }
     .takt-add-cancel { background: #f1f5f9; color: #64748b; }
     .takt-add-cancel:hover { background: #e2e8f0; }
-    .takt-add-submit {
-      background: linear-gradient(135deg, #22c55e, #16a34a); color: white;
-    }
+    .takt-add-submit { background: linear-gradient(135deg, #22c55e, #16a34a); color: white; }
     .takt-add-submit:hover { box-shadow: 0 4px 15px rgba(34,197,94,0.4); }
     .takt-add-submit:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
 
@@ -453,9 +603,7 @@
       padding: 3px 10px; border-radius: 6px; background: rgba(99,102,241,0.1);
       color: #6366f1; font-size: 10px; font-weight: 700; border: 1px solid #c7d2fe; white-space: nowrap;
     }
-    .takt-target-chip.no-target {
-      background: rgba(245,158,11,0.1); color: #d97706; border-color: #fde68a;
-    }
+    .takt-target-chip.no-target { background: rgba(245,158,11,0.1); color: #d97706; border-color: #fde68a; }
 
     /* ── CONTROL BAR ── */
     .takt-control-bar {
@@ -469,10 +617,7 @@
       cursor: pointer; transition: all 0.2s; position: relative; font-family: 'Inter', sans-serif;
     }
     .takt-obs-pill:hover { border-color: #6366f1; color: #6366f1; background: #eef2ff; }
-    .takt-obs-pill.selected {
-      border-color: #6366f1; background: #6366f1; color: white;
-      box-shadow: 0 2px 10px rgba(99,102,241,0.3);
-    }
+    .takt-obs-pill.selected { border-color: #6366f1; background: #6366f1; color: white; box-shadow: 0 2px 10px rgba(99,102,241,0.3); }
     .takt-obs-pill.completed { border-color: #22c55e; color: #22c55e; background: #f0fdf4; }
     .takt-obs-pill.completed::after {
       content: '✓'; position: absolute; top: -6px; right: -6px;
@@ -486,23 +631,11 @@
       cursor: pointer; transition: all 0.2s; display: flex; align-items: center;
       gap: 6px; letter-spacing: 0.3px; font-family: 'Inter', sans-serif; white-space: nowrap;
     }
-    .takt-btn-action.start-btn {
-      background: linear-gradient(135deg, #22c55e, #16a34a); color: white;
-      box-shadow: 0 2px 10px rgba(34,197,94,0.25);
-    }
+    .takt-btn-action.start-btn { background: linear-gradient(135deg, #22c55e, #16a34a); color: white; box-shadow: 0 2px 10px rgba(34,197,94,0.25); }
     .takt-btn-action.start-btn:hover { box-shadow: 0 4px 20px rgba(34,197,94,0.4); transform: translateY(-1px); }
-    .takt-btn-action.recording-btn {
-      background: linear-gradient(135deg, #ef4444, #dc2626); color: white;
-      box-shadow: 0 2px 10px rgba(239,68,68,0.25); animation: rec-btn-pulse 2s infinite;
-    }
-    @keyframes rec-btn-pulse {
-      0%,100% { box-shadow: 0 2px 10px rgba(239,68,68,0.25); }
-      50% { box-shadow: 0 4px 25px rgba(239,68,68,0.5); }
-    }
-    .takt-btn-action:disabled {
-      background: #e2e8f0; color: #94a3b8; cursor: not-allowed;
-      box-shadow: none; transform: none; animation: none;
-    }
+    .takt-btn-action.recording-btn { background: linear-gradient(135deg, #ef4444, #dc2626); color: white; box-shadow: 0 2px 10px rgba(239,68,68,0.25); animation: rec-btn-pulse 2s infinite; }
+    @keyframes rec-btn-pulse { 0%,100% { box-shadow: 0 2px 10px rgba(239,68,68,0.25); } 50% { box-shadow: 0 4px 25px rgba(239,68,68,0.5); } }
+    .takt-btn-action:disabled { background: #e2e8f0; color: #94a3b8; cursor: not-allowed; box-shadow: none; transform: none; animation: none; }
     .takt-btn-action.clear-btn { background: white; color: #64748b; border: 2px solid #e2e8f0; }
     .takt-btn-action.clear-btn:hover { border-color: #f59e0b; color: #f59e0b; background: #fffbeb; }
 
@@ -512,17 +645,10 @@
       gap: 16px; background: white; border-bottom: 1px solid #e2e8f0; flex-shrink: 0;
     }
     .takt-timer-bar.hidden { display: none; }
-    .takt-live-timer {
-      font-size: 30px; font-weight: 800;
-      font-family: 'JetBrains Mono', 'SF Mono', 'Courier New', monospace;
-      letter-spacing: 1px; color: #0f172a;
-    }
+    .takt-live-timer { font-size: 30px; font-weight: 800; font-family: 'JetBrains Mono', 'SF Mono', 'Courier New', monospace; letter-spacing: 1px; color: #0f172a; }
     .takt-live-timer.recording { color: #ef4444; animation: timer-color-pulse 1.5s infinite alternate; }
     @keyframes timer-color-pulse { from { color: #ef4444; } to { color: #f87171; } }
-    .takt-timer-task-label {
-      font-size: 13px; font-weight: 600; color: #475569;
-      padding: 5px 14px; background: #f1f5f9; border-radius: 8px;
-    }
+    .takt-timer-task-label { font-size: 13px; font-weight: 600; color: #475569; padding: 5px 14px; background: #f1f5f9; border-radius: 8px; }
     .takt-timer-task-label .task-name { color: #6366f1; font-weight: 700; }
     .takt-rec-dot { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; animation: rec-dot-blink 1s infinite; }
     @keyframes rec-dot-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.2; } }
@@ -534,188 +660,88 @@
     .takt-table-wrap::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
     .takt-table { width: 100%; border-collapse: collapse; font-size: 12px; }
     .takt-table thead { position: sticky; top: 0; z-index: 2; }
-    .takt-table thead th {
-      background: #f1f5f9; color: #475569; font-weight: 700; font-size: 10px;
-      text-transform: uppercase; letter-spacing: 1px; padding: 8px 14px;
-      text-align: center; border-bottom: 2px solid #e2e8f0; white-space: nowrap;
-    }
+    .takt-table thead th { background: #f1f5f9; color: #475569; font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; padding: 8px 14px; text-align: center; border-bottom: 2px solid #e2e8f0; white-space: nowrap; }
     .takt-table thead th:first-child { text-align: left; padding-left: 24px; min-width: 260px; }
     .takt-table thead th.obs-header { min-width: 100px; position: relative; }
     .takt-table thead th.obs-header.active { background: #eef2ff; color: #6366f1; }
-    .takt-table thead th.obs-header.active::after {
-      content: ''; position: absolute; bottom: -2px; left: 0; right: 0; height: 3px; background: #6366f1;
-    }
+    .takt-table thead th.obs-header.active::after { content: ''; position: absolute; bottom: -2px; left: 0; right: 0; height: 3px; background: #6366f1; }
     .takt-table tbody tr { transition: background 0.15s; }
     .takt-table tbody tr:hover { background: #f8fafc; }
     .takt-table tbody tr.current-task-row { background: #eef2ff; }
     .takt-table tbody tr.current-task-row td:first-child { border-left: 4px solid #6366f1; padding-left: 20px; }
-    .takt-table tbody td {
-      padding: 7px 14px; text-align: center; border-bottom: 1px solid #f1f5f9;
-      color: #334155; font-weight: 500;
-    }
+    .takt-table tbody td { padding: 7px 14px; text-align: center; border-bottom: 1px solid #f1f5f9; color: #334155; font-weight: 500; }
     .takt-table tbody td:first-child { text-align: left; padding-left: 24px; color: #1e293b; font-weight: 500; }
     .takt-table tbody td.target-col { color: #94a3b8; font-size: 11px; font-weight: 600; background: #fafbfc; }
     .takt-table tbody td.target-col.no-target { color: #d97706; font-style: italic; }
-    .takt-table tbody td.obs-cell {
-      font-family: 'JetBrains Mono', 'SF Mono', 'Courier New', monospace;
-      font-weight: 700; font-size: 13px; min-width: 80px;
-    }
+    .takt-table tbody td.obs-cell { font-family: 'JetBrains Mono', 'SF Mono', 'Courier New', monospace; font-weight: 700; font-size: 13px; min-width: 80px; }
     .takt-table tbody td.obs-cell.good { color: #16a34a; background: #f0fdf4; }
     .takt-table tbody td.obs-cell.over { color: #dc2626; background: #fef2f2; }
     .takt-table tbody td.obs-cell.no-target-recorded { color: #1e293b; background: #fefce8; }
     .takt-table tbody td.obs-cell.active-col { background: #eef2ff; }
-    .takt-table tbody td.obs-cell.current-cell {
-      background: #6366f1; color: white; position: relative; box-shadow: inset 0 0 0 2px #4f46e5;
-    }
+    .takt-table tbody td.obs-cell.current-cell { background: #6366f1; color: white; position: relative; box-shadow: inset 0 0 0 2px #4f46e5; }
     .takt-table tbody td.obs-cell.current-cell::after { content: ' ⏱'; font-size: 11px; }
     .takt-table tbody td.obs-cell.empty { color: #d1d5db; }
     .takt-table tbody td.obs-cell.empty-active { color: #c7d2fe; background: #eef2ff; }
     .takt-table tbody tr.row-start-time, .takt-table tbody tr.row-end-time { background: #fafbfc; }
-    .takt-table tbody tr.row-start-time td, .takt-table tbody tr.row-end-time td {
-      font-weight: 600; color: #6366f1; border-bottom: 1px solid #e2e8f0; padding: 6px 14px;
-    }
+    .takt-table tbody tr.row-start-time td, .takt-table tbody tr.row-end-time td { font-weight: 600; color: #6366f1; border-bottom: 1px solid #e2e8f0; padding: 6px 14px; }
     .takt-table tbody tr.row-start-time td:first-child, .takt-table tbody tr.row-end-time td:first-child { color: #475569; font-weight: 700; }
-    .takt-table tbody tr.row-total {
-      background: linear-gradient(135deg, #f8fafc, #f1f5f9); border-top: 2px solid #e2e8f0;
-    }
+    .takt-table tbody tr.row-total { background: linear-gradient(135deg, #f8fafc, #f1f5f9); border-top: 2px solid #e2e8f0; }
     .takt-table tbody tr.row-total td { font-weight: 800; font-size: 13px; padding: 10px 14px; color: #1e293b; }
     .takt-table tbody tr.row-total td.obs-cell.good { color: #16a34a; background: #dcfce7; }
     .takt-table tbody tr.row-total td.obs-cell.over { color: #dc2626; background: #fee2e2; }
     .takt-table tbody tr.row-total td.obs-cell.no-target-recorded { color: #1e293b; background: #fef9c3; }
 
     /* ── COACHING NOTES ── */
-    .takt-coaching-section {
-      padding: 10px 24px; background: #fffbeb; border-top: 2px solid #fde68a; flex-shrink: 0;
-    }
-    .takt-coaching-header {
-      display: flex; align-items: center; justify-content: space-between;
-      cursor: pointer; user-select: none;
-    }
-    .takt-coaching-title {
-      font-size: 12px; font-weight: 800; color: #a16207; text-transform: uppercase;
-      letter-spacing: 0.8px; display: flex; align-items: center; gap: 6px;
-    }
-    .takt-coaching-toggle {
-      font-size: 11px; font-weight: 600; color: #d97706; transition: transform 0.2s;
-    }
+    .takt-coaching-section { padding: 10px 24px; background: #fffbeb; border-top: 2px solid #fde68a; flex-shrink: 0; }
+    .takt-coaching-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
+    .takt-coaching-title { font-size: 12px; font-weight: 800; color: #a16207; text-transform: uppercase; letter-spacing: 0.8px; display: flex; align-items: center; gap: 6px; }
+    .takt-coaching-toggle { font-size: 11px; font-weight: 600; color: #d97706; transition: transform 0.2s; }
     .takt-coaching-body { overflow: hidden; transition: max-height 0.3s ease; }
     .takt-coaching-body.collapsed { max-height: 0; }
     .takt-coaching-body.expanded { max-height: 200px; }
-    .takt-coaching-textarea {
-      width: 100%; height: 80px; margin-top: 8px; padding: 10px 14px;
-      border-radius: 10px; border: 2px solid #fde68a; background: white;
-      font-size: 13px; font-weight: 500; font-family: 'Inter', sans-serif;
-      color: #1e293b; outline: none; resize: vertical; transition: border-color 0.2s;
-      box-sizing: border-box;
-    }
+    .takt-coaching-textarea { width: 100%; height: 80px; margin-top: 8px; padding: 10px 14px; border-radius: 10px; border: 2px solid #fde68a; background: white; font-size: 13px; font-weight: 500; font-family: 'Inter', sans-serif; color: #1e293b; outline: none; resize: vertical; transition: border-color 0.2s; box-sizing: border-box; }
     .takt-coaching-textarea:focus { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,0.15); }
     .takt-coaching-textarea::placeholder { color: #d4a574; }
 
     /* ── PROGRESS ── */
-    .takt-progress-section {
-      padding: 8px 24px; background: #f8fafc; border-top: 1px solid #e2e8f0;
-      display: flex; align-items: center; gap: 14px; flex-shrink: 0;
-    }
+    .takt-progress-section { padding: 8px 24px; background: #f8fafc; border-top: 1px solid #e2e8f0; display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
     .takt-progress-section.hidden { display: none; }
     .takt-progress-bar-bg { flex: 1; height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden; }
-    .takt-progress-bar-fill {
-      height: 100%; background: linear-gradient(90deg, #6366f1, #8b5cf6);
-      border-radius: 3px; transition: width 0.5s cubic-bezier(0.4,0,0.2,1);
-    }
+    .takt-progress-bar-fill { height: 100%; background: linear-gradient(90deg, #6366f1, #8b5cf6); border-radius: 3px; transition: width 0.5s cubic-bezier(0.4,0,0.2,1); }
     .takt-progress-text { font-size: 11px; font-weight: 700; color: #6366f1; white-space: nowrap; }
 
     /* ── FOOTER ── */
-    .takt-footer {
-      padding: 10px 24px; border-top: 1px solid #e2e8f0;
-      display: flex; align-items: center; justify-content: space-between;
-      background: #fafbfc; flex-shrink: 0;
-    }
+    .takt-footer { padding: 10px 24px; border-top: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between; background: #fafbfc; flex-shrink: 0; }
     .takt-footer-left { display: flex; gap: 6px; }
-    .takt-footer-btn {
-      padding: 6px 14px; border-radius: 7px; border: 1.5px solid #e2e8f0;
-      background: white; color: #64748b; font-size: 11px; font-weight: 600;
-      cursor: pointer; transition: all 0.2s; display: flex; align-items: center;
-      gap: 5px; font-family: 'Inter', sans-serif;
-    }
+    .takt-footer-btn { padding: 6px 14px; border-radius: 7px; border: 1.5px solid #e2e8f0; background: white; color: #64748b; font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 5px; font-family: 'Inter', sans-serif; }
     .takt-footer-btn:hover { border-color: #6366f1; color: #6366f1; background: #eef2ff; }
     .takt-footer-btn.danger:hover { border-color: #ef4444; color: #ef4444; background: #fef2f2; }
     .takt-footer-status { font-size: 11px; color: #94a3b8; font-weight: 500; }
 
     /* ── CONFIRM ── */
-    .takt-confirm-overlay {
-      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(255,255,255,0.85); backdrop-filter: blur(8px);
-      display: flex; align-items: center; justify-content: center;
-      z-index: 10; border-radius: 20px;
-    }
-    .takt-confirm-box {
-      background: white; border-radius: 18px; padding: 28px; width: 320px; text-align: center;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.1); border: 1px solid #e2e8f0;
-    }
-    .takt-confirm-icon {
-      width: 52px; height: 52px; border-radius: 50%; background: #fef2f2;
-      display: flex; align-items: center; justify-content: center;
-      margin: 0 auto 14px; font-size: 22px;
-    }
+    .takt-confirm-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.85); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 10; border-radius: 20px; }
+    .takt-confirm-box { background: white; border-radius: 18px; padding: 28px; width: 320px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; }
+    .takt-confirm-icon { width: 52px; height: 52px; border-radius: 50%; background: #fef2f2; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; font-size: 22px; }
     .takt-confirm-title { font-size: 16px; font-weight: 800; color: #1e293b; margin-bottom: 6px; }
     .takt-confirm-msg { font-size: 13px; color: #64748b; margin-bottom: 20px; line-height: 1.5; }
     .takt-confirm-btns { display: flex; gap: 8px; }
-    .takt-confirm-btns button {
-      flex: 1; padding: 10px; border-radius: 10px; font-size: 13px; font-weight: 700;
-      cursor: pointer; border: none; transition: all 0.2s; font-family: 'Inter', sans-serif;
-    }
+    .takt-confirm-btns button { flex: 1; padding: 10px; border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer; border: none; transition: all 0.2s; font-family: 'Inter', sans-serif; }
     .takt-confirm-cancel { background: #f1f5f9; color: #64748b; }
     .takt-confirm-cancel:hover { background: #e2e8f0; }
     .takt-confirm-ok { background: linear-gradient(135deg, #ef4444, #dc2626); color: white; }
     .takt-confirm-ok:hover { box-shadow: 0 4px 15px rgba(239,68,68,0.3); }
 
-    .takt-toast {
-      position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%) translateY(20px);
-      background: #1e293b; color: white; padding: 10px 22px; border-radius: 10px;
-      font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600;
-      z-index: 9999999; opacity: 0; transition: all 0.3s; box-shadow: 0 8px 30px rgba(0,0,0,0.2);
-    }
+    .takt-toast { position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%) translateY(20px); background: #1e293b; color: white; padding: 10px 22px; border-radius: 10px; font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600; z-index: 9999999; opacity: 0; transition: all 0.3s; box-shadow: 0 8px 30px rgba(0,0,0,0.2); }
     .takt-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-    /* ── NO ASSOCIATE STATE ── */
-    .takt-empty-state {
-      flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-      color: #94a3b8; gap: 12px; padding: 40px;
-    }
+    .takt-empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #94a3b8; gap: 12px; padding: 40px; }
     .takt-empty-state-icon { font-size: 48px; opacity: 0.5; }
     .takt-empty-state-title { font-size: 18px; font-weight: 800; color: #64748b; }
     .takt-empty-state-msg { font-size: 13px; color: #94a3b8; text-align: center; max-width: 300px; line-height: 1.6; }
-    .takt-empty-state-btn {
-      margin-top: 8px; padding: 12px 28px; border-radius: 12px; border: none;
-      background: linear-gradient(135deg, #22c55e, #16a34a); color: white;
-      font-size: 14px; font-weight: 700; cursor: pointer; transition: all 0.2s;
-      font-family: 'Inter', sans-serif; display: flex; align-items: center; gap: 8px;
-    }
+    .takt-empty-state-btn { margin-top: 8px; padding: 12px 28px; border-radius: 12px; border: none; background: linear-gradient(135deg, #22c55e, #16a34a); color: white; font-size: 14px; font-weight: 700; cursor: pointer; transition: all 0.2s; font-family: 'Inter', sans-serif; display: flex; align-items: center; gap: 8px; }
     .takt-empty-state-btn:hover { box-shadow: 0 8px 25px rgba(34,197,94,0.4); transform: translateY(-2px); }
 
-    /* ── PAGE TRANSITION ── */
-    .takt-page-transition {
-      animation: page-flip 0.35s ease;
-    }
-    @keyframes page-flip {
-      0% { opacity: 0; transform: translateX(30px); }
-      100% { opacity: 1; transform: translateX(0); }
-    }
-    .takt-page-transition-left {
-      animation: page-flip-left 0.35s ease;
-    }
-    @keyframes page-flip-left {
-      0% { opacity: 0; transform: translateX(-30px); }
-      100% { opacity: 1; transform: translateX(0); }
-    }
-
-    /* ── DELETE ASSOCIATE BTN ── */
-    .takt-assoc-delete-btn {
-      width: 28px; height: 28px; border-radius: 6px; border: 1.5px solid #fca5a5;
-      background: white; color: #ef4444; font-size: 13px; cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      transition: all 0.2s; flex-shrink: 0;
-    }
+    .takt-assoc-delete-btn { width: 28px; height: 28px; border-radius: 6px; border: 1.5px solid #fca5a5; background: white; color: #ef4444; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; flex-shrink: 0; }
     .takt-assoc-delete-btn:hover { background: #ef4444; color: white; border-color: #ef4444; }
   `;
   document.head.appendChild(styles);
@@ -767,8 +793,11 @@
     return c;
   }
 
-  function hasTargets(config) {
-    return config.totalTarget > 0;
+  function hasTargets(config) { return config.totalTarget > 0; }
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   // ═══════════════════════════════════════════════════════
@@ -808,7 +837,6 @@
     const showSub = hasSubPaths(state.selectedProcess);
     const displaySub = getDisplaySubProcess();
 
-    // ── HEADER ──
     let subtitlePath = state.selectedProcess;
     if (displaySub) subtitlePath += ' › ' + displaySub;
     if (hasAssociate) subtitlePath += ' › ' + assoc.name;
@@ -830,7 +858,12 @@
         </div>
       </div>`;
 
-    // ── AUDITOR BAR ──
+    const syncBarHTML = `
+      <div class="takt-sync-bar">
+        <span id="takt-sync-badge" style="padding:3px 10px;border-radius:6px;font-size:11px;font-weight:700;font-family:'Inter',sans-serif;">⟳ Connecting to Sheets...</span>
+        <button class="takt-sync-refresh" id="takt-sync-now">↺ Sync Now</button>
+      </div>`;
+
     const auditorBarHTML = `
       <div class="takt-auditor-bar">
         <div class="takt-auditor-group">
@@ -847,12 +880,11 @@
         </div>
       </div>`;
 
-    // ── ASSOCIATE BAR ──
     let assocCardHTML = '';
     if (hasAssociate) {
       const completed = getCompletedCount(assoc);
       assocCardHTML = `
-        <div class="takt-assoc-card" id="takt-assoc-card">
+        <div class="takt-assoc-card">
           <div class="takt-assoc-avatar">${getInitials(assoc.name)}</div>
           <div class="takt-assoc-info">
             <div class="takt-assoc-name">${escapeHtml(assoc.name)}</div>
@@ -862,31 +894,27 @@
           <button class="takt-assoc-delete-btn" id="takt-delete-assoc" title="Remove associate">✕</button>
         </div>`;
     } else {
-      assocCardHTML = `
-        <div class="takt-assoc-empty-card">
-          👤 No associate selected — search or add one
-        </div>`;
+      assocCardHTML = `<div class="takt-assoc-empty-card">👤 No associate selected — search or add one</div>`;
     }
 
     const navDisabled = state.isRunning || appData.associates.length <= 1;
     const assocBarHTML = `
       <div class="takt-associate-bar" id="takt-associate-bar">
-        <button class="takt-assoc-nav-btn" id="takt-nav-prev" title="Previous Associate" ${navDisabled ? 'disabled' : ''}>‹</button>
+        <button class="takt-assoc-nav-btn" id="takt-nav-prev" ${navDisabled ? 'disabled' : ''}>‹</button>
         ${assocCardHTML}
-        <button class="takt-assoc-nav-btn" id="takt-nav-next" title="Next Associate" ${navDisabled ? 'disabled' : ''}>›</button>
+        <button class="takt-assoc-nav-btn" id="takt-nav-next" ${navDisabled ? 'disabled' : ''}>›</button>
         <div class="takt-assoc-actions">
           <button class="takt-assoc-action-btn" id="takt-search-assoc" ${state.isRunning ? 'disabled style="opacity:0.4;pointer-events:none;"' : ''}>🔍 Search</button>
           <button class="takt-assoc-action-btn primary" id="takt-add-assoc" ${state.isRunning ? 'disabled style="opacity:0.4;pointer-events:none;"' : ''}>＋ Add New</button>
         </div>
       </div>`;
 
-    // If no associate, show empty state
     if (!hasAssociate) {
-      panel.innerHTML = headerHTML + auditorBarHTML + assocBarHTML + `
+      panel.innerHTML = headerHTML + syncBarHTML + auditorBarHTML + assocBarHTML + `
         <div class="takt-empty-state">
           <div class="takt-empty-state-icon">👤</div>
           <div class="takt-empty-state-title">No Associate Selected</div>
-          <div class="takt-empty-state-msg">Add an associate to begin the time study. Each associate will have their own set of observations and coaching notes.</div>
+          <div class="takt-empty-state-msg">Add an associate to begin the time study. Data syncs automatically to Google Sheets.</div>
           <button class="takt-empty-state-btn" id="takt-empty-add">＋ Add Associate</button>
         </div>
         <div class="takt-footer">
@@ -898,10 +926,10 @@
           <div class="takt-footer-status">${appData.associates.length} associate(s) saved</div>
         </div>`;
       wireBaseEvents();
+      updateSyncBadge();
       return;
     }
 
-    // ── PROCESS BAR ──
     let processOptions = '';
     Object.keys(PROCESS_PATHS).forEach(p => {
       processOptions += `<option value="${p}" ${p === state.selectedProcess ? 'selected' : ''}>${p}</option>`;
@@ -913,42 +941,29 @@
       Object.keys(PROCESS_PATHS[state.selectedProcess]).forEach(s => {
         subOptions += `<option value="${s}" ${s === state.selectedSubProcess ? 'selected' : ''}>${s}</option>`;
       });
-      const ddDisabled = state.isRunning ? 'disabled' : '';
       subDropdownHTML = `
         <span class="takt-process-arrow">›</span>
         <div class="takt-process-group">
           <span class="takt-process-label">Sub-Process</span>
-          <select class="takt-process-select" id="takt-sub-dd" ${ddDisabled}>${subOptions}</select>
+          <select class="takt-process-select" id="takt-sub-dd" ${state.isRunning ? 'disabled' : ''}>${subOptions}</select>
         </div>`;
     }
 
-    const ddDisabled = state.isRunning ? 'disabled' : '';
-
-    let chipsHTML = '';
-    if (showTargets) {
-      TASKS.forEach(t => {
-        chipsHTML += `<span class="takt-target-chip">${t.name}: ${t.target}s</span>`;
-      });
-    } else {
-      chipsHTML = `<span class="takt-target-chip no-target">⚠ No target times set</span>`;
-    }
-
-    const tagText = showTargets
-      ? `${totalTasks} Tasks · ${TOTAL_TARGET}s Target`
-      : `${totalTasks} Tasks · No Target`;
+    let chipsHTML = showTargets
+      ? TASKS.map(t => `<span class="takt-target-chip">${t.name}: ${t.target}s</span>`).join('')
+      : `<span class="takt-target-chip no-target">⚠ No target times set</span>`;
 
     const processBarHTML = `
       <div class="takt-process-bar">
         <div class="takt-process-group">
           <span class="takt-process-label">Process</span>
-          <select class="takt-process-select" id="takt-process-dd" ${ddDisabled}>${processOptions}</select>
+          <select class="takt-process-select" id="takt-process-dd" ${state.isRunning ? 'disabled' : ''}>${processOptions}</select>
         </div>
         ${subDropdownHTML}
         <div class="takt-target-summary">${chipsHTML}</div>
-        <div class="takt-process-tag">${tagText}</div>
+        <div class="takt-process-tag">${totalTasks} Tasks · ${showTargets ? TOTAL_TARGET + 's Target' : 'No Target'}</div>
       </div>`;
 
-    // ── CONTROL BAR ──
     let pillsHTML = '';
     for (let i = 1; i <= NUM_OBS; i++) {
       const isSel = state.selectedObs === i;
@@ -976,91 +991,58 @@
         <button class="takt-btn-action clear-btn" id="takt-clear-btn" ${!state.selectedObs ? 'disabled style="opacity:0.4;"' : ''}>🔄 Clear</button>
       </div>`;
 
-    // ── TIMER BAR ──
-    let timerBarHTML = '';
-    if (state.isRunning) {
-      let taskLabel = state.currentTaskIndex >= 0
-        ? `Recording: <span class="task-name">${TASKS[state.currentTaskIndex].name}</span>`
-        : 'Click button to record <span class="task-name">Start Time</span>';
-      timerBarHTML = `
-        <div class="takt-timer-bar">
-          <div class="takt-rec-dot"></div>
-          <div class="takt-live-timer recording" id="takt-timer-main">${formatElapsed(Date.now() - (state.lastClickTime || Date.now()))}</div>
-          <div class="takt-timer-task-label">${taskLabel}</div>
-        </div>`;
-    } else {
-      timerBarHTML = `<div class="takt-timer-bar hidden"></div>`;
-    }
+    let timerBarHTML = state.isRunning ? `
+      <div class="takt-timer-bar">
+        <div class="takt-rec-dot"></div>
+        <div class="takt-live-timer recording" id="takt-timer-main">${formatElapsed(Date.now() - (state.lastClickTime || Date.now()))}</div>
+        <div class="takt-timer-task-label">${state.currentTaskIndex >= 0
+          ? `Recording: <span class="task-name">${TASKS[state.currentTaskIndex].name}</span>`
+          : 'Click button to record <span class="task-name">Start Time</span>'
+        }</div>
+      </div>` : `<div class="takt-timer-bar hidden"></div>`;
 
-    // ── TABLE ──
     let tableRowsHTML = '';
-
-    // Start time row
     tableRowsHTML += `<tr class="row-start-time"><td style="padding-left:24px;">⏰ Start Time</td><td class="target-col">—</td>`;
     for (let i = 1; i <= NUM_OBS; i++) {
-      const o = observations[i];
-      const isA = state.selectedObs === i;
+      const o = observations[i]; const isA = state.selectedObs === i;
       tableRowsHTML += `<td class="obs-cell ${isA ? 'active-col' : ''}" style="font-size:11px;color:${o.startTime ? '#6366f1' : '#d1d5db'}">${o.startTime || '—'}</td>`;
     }
     tableRowsHTML += `</tr>`;
 
-    // Task rows
     TASKS.forEach((task, idx) => {
       const isCurrentTask = state.isRunning && state.currentTaskIndex === idx;
-      const targetDisplay = task.target > 0 ? `${task.target}s` : 'N/A';
-      const targetClass = task.target > 0 ? '' : 'no-target';
       tableRowsHTML += `<tr class="${isCurrentTask ? 'current-task-row' : ''}">
         <td style="padding-left:${isCurrentTask ? '20px' : '24px'};">
-          <span style="color:#94a3b8;font-size:10px;font-weight:700;margin-right:6px;">${(idx + 1).toString().padStart(2, '0')}</span>
-          ${task.name}
+          <span style="color:#94a3b8;font-size:10px;font-weight:700;margin-right:6px;">${(idx+1).toString().padStart(2,'0')}</span>${task.name}
         </td>
-        <td class="target-col ${targetClass}">${targetDisplay}</td>`;
+        <td class="target-col ${task.target > 0 ? '' : 'no-target'}">${task.target > 0 ? task.target+'s' : 'N/A'}</td>`;
       for (let i = 1; i <= NUM_OBS; i++) {
-        const o = observations[i];
-        const isA = state.selectedObs === i;
-        const val = o.tasks[idx];
-        const isCur = isCurrentTask && isA;
-        if (isCur) {
+        const o = observations[i]; const isA = state.selectedObs === i; const val = o.tasks[idx];
+        if (isCurrentTask && isA) {
           tableRowsHTML += `<td class="obs-cell current-cell" id="takt-live-cell">0s</td>`;
         } else if (val !== undefined) {
-          let cellClass = '';
-          if (task.target > 0) {
-            cellClass = val > task.target ? 'over' : 'good';
-          } else {
-            cellClass = 'no-target-recorded';
-          }
+          const cellClass = task.target > 0 ? (val > task.target ? 'over' : 'good') : 'no-target-recorded';
           tableRowsHTML += `<td class="obs-cell ${cellClass}">${val}s</td>`;
-        } else if (isA) {
-          tableRowsHTML += `<td class="obs-cell empty-active">—</td>`;
         } else {
-          tableRowsHTML += `<td class="obs-cell empty">—</td>`;
+          tableRowsHTML += `<td class="obs-cell ${isA ? 'empty-active' : 'empty'}">—</td>`;
         }
       }
       tableRowsHTML += `</tr>`;
     });
 
-    // End time row
     tableRowsHTML += `<tr class="row-end-time"><td style="padding-left:24px;">⏰ End Time</td><td class="target-col">—</td>`;
     for (let i = 1; i <= NUM_OBS; i++) {
-      const o = observations[i];
-      const isA = state.selectedObs === i;
+      const o = observations[i]; const isA = state.selectedObs === i;
       tableRowsHTML += `<td class="obs-cell ${isA ? 'active-col' : ''}" style="font-size:11px;color:${o.endTime ? '#6366f1' : '#d1d5db'}">${o.endTime || '—'}</td>`;
     }
     tableRowsHTML += `</tr>`;
 
-    // Total row
-    const totalTargetDisplay = showTargets ? `${TOTAL_TARGET}s` : 'N/A';
-    tableRowsHTML += `<tr class="row-total"><td style="padding-left:24px;">📊 Total</td><td class="target-col" style="font-weight:800;color:#1e293b;">${totalTargetDisplay}</td>`;
+    tableRowsHTML += `<tr class="row-total"><td style="padding-left:24px;">📊 Total</td><td class="target-col" style="font-weight:800;color:#1e293b;">${showTargets ? TOTAL_TARGET+'s' : 'N/A'}</td>`;
     for (let i = 1; i <= NUM_OBS; i++) {
       const o = observations[i];
       if (o.total !== null) {
-        let totalCellClass = '';
-        if (showTargets) {
-          totalCellClass = o.total <= TOTAL_TARGET ? 'good' : 'over';
-        } else {
-          totalCellClass = 'no-target-recorded';
-        }
-        tableRowsHTML += `<td class="obs-cell ${totalCellClass}">${o.total}s</td>`;
+        const cls = showTargets ? (o.total <= TOTAL_TARGET ? 'good' : 'over') : 'no-target-recorded';
+        tableRowsHTML += `<td class="obs-cell ${cls}">${o.total}s</td>`;
       } else {
         tableRowsHTML += `<td class="obs-cell empty">—</td>`;
       }
@@ -1075,18 +1057,11 @@
     const tableHTML = `
       <div class="takt-table-wrap">
         <table class="takt-table">
-          <thead>
-            <tr>
-              <th>Task</th>
-              <th>Target</th>
-              ${obsHeadersHTML}
-            </tr>
-          </thead>
+          <thead><tr><th>Task</th><th>Target</th>${obsHeadersHTML}</tr></thead>
           <tbody>${tableRowsHTML}</tbody>
         </table>
       </div>`;
 
-    // ── COACHING NOTES ──
     const coachingCollapsed = !state.coachingExpanded;
     const coachingHTML = `
       <div class="takt-coaching-section">
@@ -1099,30 +1074,17 @@
         </div>
       </div>`;
 
-    // ── PROGRESS ──
     const progressHTML = `
       <div class="takt-progress-section ${!state.selectedObs || (!state.isRunning && !isComplete && tasksDone === 0) ? 'hidden' : ''}">
-        <div class="takt-progress-bar-bg">
-          <div class="takt-progress-bar-fill" style="width: ${progress}%"></div>
-        </div>
+        <div class="takt-progress-bar-bg"><div class="takt-progress-bar-fill" style="width:${progress}%"></div></div>
         <div class="takt-progress-text">${tasksDone}/${totalTasks} Tasks (${Math.round(progress)}%)</div>
       </div>`;
 
-    // ── FOOTER ──
     let statusText = 'Select an observation to begin';
-    if (state.isRunning) {
-      statusText = `Recording Obs ${state.selectedObs} — Task ${(obs ? obs.tasks.length : 0) + (state.currentTaskIndex >= 0 ? 1 : 0)} of ${totalTasks}`;
-    } else if (isComplete) {
-      if (showTargets) {
-        statusText = `✅ Obs ${state.selectedObs} complete — ${obs.total}s total`;
-      } else {
-        statusText = `✅ Obs ${state.selectedObs} complete — ${obs.total}s recorded`;
-      }
-    } else if (state.selectedObs && tasksDone > 0) {
-      statusText = `Obs ${state.selectedObs} — ${tasksDone}/${totalTasks} tasks recorded`;
-    } else if (state.selectedObs) {
-      statusText = `Obs ${state.selectedObs} selected — Ready to start`;
-    }
+    if (state.isRunning) statusText = `Recording Obs ${state.selectedObs} — Task ${(obs ? obs.tasks.length : 0) + (state.currentTaskIndex >= 0 ? 1 : 0)} of ${totalTasks}`;
+    else if (isComplete) statusText = `✅ Obs ${state.selectedObs} complete — ${obs.total}s ${showTargets ? 'total' : 'recorded'}`;
+    else if (state.selectedObs && tasksDone > 0) statusText = `Obs ${state.selectedObs} — ${tasksDone}/${totalTasks} tasks recorded`;
+    else if (state.selectedObs) statusText = `Obs ${state.selectedObs} selected — Ready to start`;
 
     const footerHTML = `
       <div class="takt-footer">
@@ -1134,24 +1096,15 @@
         <div class="takt-footer-status">${statusText} · Associate ${state.currentAssociateIndex + 1} of ${appData.associates.length}</div>
       </div>`;
 
-    // ── ASSEMBLE ──
-    panel.innerHTML = headerHTML + auditorBarHTML + assocBarHTML + processBarHTML + controlBarHTML + timerBarHTML + tableHTML + coachingHTML + progressHTML + footerHTML;
+    panel.innerHTML = headerHTML + syncBarHTML + auditorBarHTML + assocBarHTML + processBarHTML + controlBarHTML + timerBarHTML + tableHTML + coachingHTML + progressHTML + footerHTML;
 
     wireBaseEvents();
     wireAssociateEvents();
-    wireTimerEvents();
+    updateSyncBadge();
   }
 
   // ═══════════════════════════════════════════════════════
-  // ESCAPE HTML
-  // ═══════════════════════════════════════════════════════
-  function escapeHtml(str) {
-    if (!str) return '';
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // WIRE — BASE EVENTS
+  // WIRE EVENTS
   // ═══════════════════════════════════════════════════════
   function wireBaseEvents() {
     const closeBtn = document.getElementById('takt-close');
@@ -1159,35 +1112,28 @@
     if (closeBtn) closeBtn.onclick = togglePanel;
     if (minBtn) minBtn.onclick = togglePanel;
 
-    // Auditor inputs
     const audNameInput = document.getElementById('takt-auditor-name');
     const audLoginInput = document.getElementById('takt-auditor-login');
-    if (audNameInput) {
-      audNameInput.oninput = (e) => { appData.auditorName = e.target.value; saveData(); };
-    }
-    if (audLoginInput) {
-      audLoginInput.oninput = (e) => { appData.auditorLogin = e.target.value; saveData(); };
-    }
+    if (audNameInput) audNameInput.oninput = (e) => { appData.auditorName = e.target.value; saveData(); };
+    if (audLoginInput) audLoginInput.oninput = (e) => { appData.auditorLogin = e.target.value; saveData(); };
 
-    // Search & Add buttons
     const searchBtn = document.getElementById('takt-search-assoc');
     const addBtn = document.getElementById('takt-add-assoc');
     const emptyAddBtn = document.getElementById('takt-empty-add');
+    const syncNowBtn = document.getElementById('takt-sync-now');
     if (searchBtn) searchBtn.onclick = () => showSearchOverlay();
     if (addBtn) addBtn.onclick = () => showAddForm();
     if (emptyAddBtn) emptyAddBtn.onclick = () => showAddForm();
+    if (syncNowBtn) syncNowBtn.onclick = () => { showToast('↺ Syncing with Google Sheets...'); syncFromSheets(); };
 
-    // Nav
     const prevBtn = document.getElementById('takt-nav-prev');
     const nextBtn = document.getElementById('takt-nav-next');
     if (prevBtn) prevBtn.onclick = () => navigateAssociate(-1);
     if (nextBtn) nextBtn.onclick = () => navigateAssociate(1);
 
-    // Delete associate
     const deleteBtn = document.getElementById('takt-delete-assoc');
     if (deleteBtn) deleteBtn.onclick = handleDeleteAssociate;
 
-    // Footer
     const exportBtn = document.getElementById('takt-export-csv');
     const copyBtn = document.getElementById('takt-copy-data');
     const clearAllBtn = document.getElementById('takt-clear-all');
@@ -1198,35 +1144,25 @@
     initDrag();
   }
 
-  // ═══════════════════════════════════════════════════════
-  // WIRE — ASSOCIATE EVENTS (when associate exists)
-  // ═══════════════════════════════════════════════════════
   function wireAssociateEvents() {
-    // Process dropdowns
     const processDd = document.getElementById('takt-process-dd');
     const subDd = document.getElementById('takt-sub-dd');
     if (processDd) {
       processDd.onchange = (e) => {
         state.selectedProcess = e.target.value;
-        const subs = Object.keys(PROCESS_PATHS[state.selectedProcess]);
-        state.selectedSubProcess = subs[0];
+        state.selectedSubProcess = Object.keys(PROCESS_PATHS[state.selectedProcess])[0];
         state.selectedObs = null;
-        ensureObservations();
-        saveData();
-        renderPanel();
+        ensureObservations(); saveData(); renderPanel();
       };
     }
     if (subDd) {
       subDd.onchange = (e) => {
         state.selectedSubProcess = e.target.value;
         state.selectedObs = null;
-        ensureObservations();
-        saveData();
-        renderPanel();
+        ensureObservations(); saveData(); renderPanel();
       };
     }
 
-    // Obs pills
     panel.querySelectorAll('.takt-obs-pill').forEach(btn => {
       btn.onclick = () => {
         if (state.isRunning && state.selectedObs !== parseInt(btn.dataset.obs)) return;
@@ -1235,47 +1171,28 @@
       };
     });
 
-    // Start/Clear
     const startBtn = document.getElementById('takt-start-btn');
     const clearBtn = document.getElementById('takt-clear-btn');
     if (startBtn) startBtn.onclick = handleStartStop;
     if (clearBtn) clearBtn.onclick = handleClear;
 
-    // Coaching
     const coachToggle = document.getElementById('takt-coaching-toggle');
     const coachNotes = document.getElementById('takt-coaching-notes');
-    if (coachToggle) {
-      coachToggle.onclick = () => {
-        state.coachingExpanded = !state.coachingExpanded;
-        renderPanel();
-      };
-    }
+    if (coachToggle) coachToggle.onclick = () => { state.coachingExpanded = !state.coachingExpanded; renderPanel(); };
     if (coachNotes) {
       coachNotes.oninput = (e) => {
         const assoc = getCurrentAssociate();
-        if (assoc) {
-          assoc.coachingNotes = e.target.value;
-          saveData();
-        }
+        if (assoc) { assoc.coachingNotes = e.target.value; saveData(); }
       };
     }
-  }
-
-  // ═══════════════════════════════════════════════════════
-  // WIRE — TIMER EVENTS
-  // ═══════════════════════════════════════════════════════
-  function wireTimerEvents() {
-    // Timer updates handled by interval
   }
 
   // ═══════════════════════════════════════════════════════
   // SEARCH OVERLAY
   // ═══════════════════════════════════════════════════════
   function showSearchOverlay() {
-    // Remove existing
     const existing = document.getElementById('takt-search-overlay');
     if (existing) { existing.remove(); return; }
-
     const bar = document.getElementById('takt-associate-bar');
     if (!bar) return;
 
@@ -1288,25 +1205,18 @@
       const filtered = appData.associates.filter(a =>
         a.name.toLowerCase().includes(q) || a.login.toLowerCase().includes(q)
       );
-
-      let resultsHTML = '';
-      if (filtered.length === 0) {
-        resultsHTML = `<div class="takt-search-no-results">No associates found matching "${escapeHtml(query)}"</div>`;
-      } else {
-        filtered.forEach((a) => {
-          const realIdx = appData.associates.indexOf(a);
-          const isActive = realIdx === state.currentAssociateIndex;
-          resultsHTML += `
-            <div class="takt-search-result ${isActive ? 'active' : ''}" data-index="${realIdx}">
-              <div class="takt-search-result-avatar">${getInitials(a.name)}</div>
-              <div class="takt-search-result-info">
-                <div class="takt-search-result-name">${escapeHtml(a.name)}</div>
-                <div class="takt-search-result-login">${escapeHtml(a.login)}</div>
-              </div>
-            </div>`;
-        });
-      }
-      return resultsHTML;
+      if (filtered.length === 0) return `<div class="takt-search-no-results">No associates found matching "${escapeHtml(query)}"</div>`;
+      return filtered.map(a => {
+        const realIdx = appData.associates.indexOf(a);
+        const isActive = realIdx === state.currentAssociateIndex;
+        return `<div class="takt-search-result ${isActive ? 'active' : ''}" data-index="${realIdx}">
+          <div class="takt-search-result-avatar">${getInitials(a.name)}</div>
+          <div class="takt-search-result-info">
+            <div class="takt-search-result-name">${escapeHtml(a.name)}</div>
+            <div class="takt-search-result-login">${escapeHtml(a.login)}</div>
+          </div>
+        </div>`;
+      }).join('');
     }
 
     overlay.innerHTML = `
@@ -1314,43 +1224,31 @@
         <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
         <input class="takt-search-input" id="takt-search-input" placeholder="Search by name or login..." autofocus />
       </div>
-      <div class="takt-search-results" id="takt-search-results">
-        ${buildResults('')}
-      </div>
-      <div class="takt-search-add-new" id="takt-search-add-new">＋ Add new associate</div>
-    `;
+      <div class="takt-search-results" id="takt-search-results">${buildResults('')}</div>
+      <div class="takt-search-add-new" id="takt-search-add-new">＋ Add new associate</div>`;
 
     bar.appendChild(overlay);
 
     const input = document.getElementById('takt-search-input');
     const resultsContainer = document.getElementById('takt-search-results');
-
     input.focus();
-    input.oninput = () => {
-      resultsContainer.innerHTML = buildResults(input.value);
-      wireSearchResults();
-    };
+    input.oninput = () => { resultsContainer.innerHTML = buildResults(input.value); wireSearchResults(); };
 
     function wireSearchResults() {
       resultsContainer.querySelectorAll('.takt-search-result').forEach(el => {
         el.onclick = () => {
-          const idx = parseInt(el.dataset.index);
-          state.currentAssociateIndex = idx;
+          state.currentAssociateIndex = parseInt(el.dataset.index);
           state.selectedObs = null;
           overlay.remove();
           renderPanel();
-          showToast(`👤 Switched to ${appData.associates[idx].name}`);
+          showToast(`👤 Switched to ${appData.associates[parseInt(el.dataset.index)].name}`);
         };
       });
     }
     wireSearchResults();
 
-    document.getElementById('takt-search-add-new').onclick = () => {
-      overlay.remove();
-      showAddForm(input.value);
-    };
+    document.getElementById('takt-search-add-new').onclick = () => { overlay.remove(); showAddForm(input.value); };
 
-    // Close on outside click
     setTimeout(() => {
       const closeHandler = (e) => {
         if (!overlay.contains(e.target) && e.target.id !== 'takt-search-assoc') {
@@ -1366,7 +1264,6 @@
   // ADD FORM
   // ═══════════════════════════════════════════════════════
   function showAddForm(prefillName) {
-    // Remove existing
     const existing = document.querySelector('.takt-add-overlay');
     if (existing) existing.remove();
 
@@ -1379,10 +1276,12 @@
         <div class="takt-add-field">
           <label>Associate Name</label>
           <input id="takt-add-name" placeholder="e.g. Jane Doe" value="${escapeHtml(prefillName || '')}" />
+          <div class="takt-add-warn" id="takt-name-warn">⚠ Name matches current auditor name</div>
         </div>
         <div class="takt-add-field">
           <label>Associate Login</label>
           <input id="takt-add-login" placeholder="e.g. jdoe" />
+          <div class="takt-add-warn" id="takt-login-warn">⚠ Login already exists</div>
         </div>
         <div class="takt-add-btns">
           <button class="takt-add-cancel" id="takt-add-cancel">Cancel</button>
@@ -1394,12 +1293,23 @@
     const nameInput = document.getElementById('takt-add-name');
     const loginInput = document.getElementById('takt-add-login');
     const submitBtn = document.getElementById('takt-add-submit');
+    const nameWarn = document.getElementById('takt-name-warn');
+    const loginWarn = document.getElementById('takt-login-warn');
 
     nameInput.focus();
 
     function validateForm() {
-      const valid = nameInput.value.trim().length > 0 && loginInput.value.trim().length > 0;
-      submitBtn.disabled = !valid;
+      const nameVal = nameInput.value.trim();
+      const loginVal = loginInput.value.trim();
+
+      // Name matches auditor warning
+      nameWarn.style.display = (nameVal && appData.auditorName && nameVal.toLowerCase() === appData.auditorName.toLowerCase()) ? 'block' : 'none';
+
+      // Duplicate login warning
+      const dupLogin = appData.associates.find(a => a.login.toLowerCase() === loginVal.toLowerCase());
+      loginWarn.style.display = (loginVal && dupLogin) ? 'block' : 'none';
+
+      submitBtn.disabled = !(nameVal.length > 0 && loginVal.length > 0 && !dupLogin);
     }
 
     nameInput.oninput = validateForm;
@@ -1408,21 +1318,16 @@
 
     document.getElementById('takt-add-cancel').onclick = () => overlay.remove();
     submitBtn.onclick = () => {
-      if (nameInput.value.trim() && loginInput.value.trim()) {
-        addAssociate(nameInput.value, loginInput.value);
+      const result = addAssociate(nameInput.value, loginInput.value);
+      if (result !== false) {
         overlay.remove();
         renderPanel();
-        showToast(`👤 Added ${nameInput.value.trim()}`);
+        showToast(`👤 Added ${nameInput.value.trim()} — syncing to Sheets...`);
       }
     };
 
-    // Enter key support
-    loginInput.onkeydown = (e) => {
-      if (e.key === 'Enter' && !submitBtn.disabled) submitBtn.click();
-    };
-    nameInput.onkeydown = (e) => {
-      if (e.key === 'Enter') loginInput.focus();
-    };
+    loginInput.onkeydown = (e) => { if (e.key === 'Enter' && !submitBtn.disabled) submitBtn.click(); };
+    nameInput.onkeydown = (e) => { if (e.key === 'Enter') loginInput.focus(); };
   }
 
   // ═══════════════════════════════════════════════════════
@@ -1431,22 +1336,14 @@
   function handleDeleteAssociate() {
     const assoc = getCurrentAssociate();
     if (!assoc || state.isRunning) return;
-    showConfirm(
-      `Remove ${assoc.name}?`,
-      `All observation data and coaching notes for this associate will be permanently deleted.`,
-      () => {
-        appData.associates.splice(state.currentAssociateIndex, 1);
-        if (appData.associates.length === 0) {
-          state.currentAssociateIndex = -1;
-        } else {
-          state.currentAssociateIndex = Math.min(state.currentAssociateIndex, appData.associates.length - 1);
-        }
-        state.selectedObs = null;
-        saveData();
-        renderPanel();
-        showToast(`🗑 ${assoc.name} removed`);
-      }
-    );
+    showConfirm(`Remove ${assoc.name}?`, `All observation data for this associate will be deleted from Sheets too.`, () => {
+      appData.associates.splice(state.currentAssociateIndex, 1);
+      state.currentAssociateIndex = appData.associates.length === 0 ? -1 : Math.min(state.currentAssociateIndex, appData.associates.length - 1);
+      state.selectedObs = null;
+      saveData();
+      renderPanel();
+      showToast(`🗑 ${assoc.name} removed`);
+    });
   }
 
   // ═══════════════════════════════════════════════════════
@@ -1470,10 +1367,7 @@
       panel.style.transform = 'scale(1)';
     };
     document.onmouseup = () => {
-      if (state.isDragging) {
-        state.isDragging = false;
-        panel.style.transition = 'all 0.35s cubic-bezier(0.4,0,0.2,1)';
-      }
+      if (state.isDragging) { state.isDragging = false; panel.style.transition = 'all 0.35s cubic-bezier(0.4,0,0.2,1)'; }
     };
   }
 
@@ -1523,14 +1417,9 @@
         stopElapsedTimer();
         updateBadge();
         saveData();
-
+        const diff = obs.total - TOTAL_TARGET;
         if (showTargets) {
-          const diff = obs.total - TOTAL_TARGET;
-          if (diff <= 0) {
-            showToast(`✅ Obs ${state.selectedObs} complete! ${Math.abs(diff)}s under target`);
-          } else {
-            showToast(`⚠️ Obs ${state.selectedObs} complete! ${diff}s over target`);
-          }
+          showToast(diff <= 0 ? `✅ Obs ${state.selectedObs} complete! ${Math.abs(diff)}s under target` : `⚠️ Obs ${state.selectedObs} complete! ${diff}s over target`);
         } else {
           showToast(`✅ Obs ${state.selectedObs} complete! ${obs.total}s total`);
         }
@@ -1559,10 +1448,7 @@
   }
 
   function stopElapsedTimer() {
-    if (state.elapsedInterval) {
-      clearInterval(state.elapsedInterval);
-      state.elapsedInterval = null;
-    }
+    if (state.elapsedInterval) { clearInterval(state.elapsedInterval); state.elapsedInterval = null; }
   }
 
   // ═══════════════════════════════════════════════════════
@@ -1570,46 +1456,24 @@
   // ═══════════════════════════════════════════════════════
   function handleClear() {
     if (!state.selectedObs || !getCurrentAssociate()) return;
-    showConfirm(
-      `Clear Observation ${state.selectedObs}?`,
-      'All recorded times for this observation will be deleted.',
-      () => {
-        if (state.isRunning) {
-          state.isRunning = false;
-          state.currentTaskIndex = -1;
-          fab.classList.remove('active');
-          stopElapsedTimer();
-        }
-        getObs()[state.selectedObs] = { startTime: null, endTime: null, tasks: [], total: null };
-        updateBadge();
-        saveData();
-        renderPanel();
-        showToast(`🔄 Observation ${state.selectedObs} cleared`);
-      }
-    );
+    showConfirm(`Clear Observation ${state.selectedObs}?`, 'All recorded times for this observation will be deleted.', () => {
+      if (state.isRunning) { state.isRunning = false; state.currentTaskIndex = -1; fab.classList.remove('active'); stopElapsedTimer(); }
+      getObs()[state.selectedObs] = { startTime: null, endTime: null, tasks: [], total: null };
+      updateBadge(); saveData(); renderPanel();
+      showToast(`🔄 Observation ${state.selectedObs} cleared`);
+    });
   }
 
   function handleClearAll() {
     if (appData.associates.length === 0) return;
-    showConfirm(
-      'Clear ALL Data?',
-      `All associates, observations, and coaching notes will be permanently deleted.`,
-      () => {
-        state.isRunning = false;
-        state.currentTaskIndex = -1;
-        fab.classList.remove('active');
-        stopElapsedTimer();
-        appData.associates = [];
-        appData.auditorName = '';
-        appData.auditorLogin = '';
-        state.currentAssociateIndex = -1;
-        state.selectedObs = null;
-        updateBadge();
-        saveData();
-        renderPanel();
-        showToast('🗑 All data cleared');
-      }
-    );
+    showConfirm('Clear ALL Data?', 'All associates, observations, and coaching notes will be permanently deleted from Sheets too.', () => {
+      state.isRunning = false; state.currentTaskIndex = -1;
+      fab.classList.remove('active'); stopElapsedTimer();
+      appData.associates = []; appData.auditorName = ''; appData.auditorLogin = '';
+      state.currentAssociateIndex = -1; state.selectedObs = null;
+      updateBadge(); saveData(); renderPanel();
+      showToast('🗑 All data cleared');
+    });
   }
 
   function showConfirm(title, msg, onConfirm) {
@@ -1647,41 +1511,31 @@
     csv += `Associate Name,${assoc.name}\nAssociate Login,${assoc.login}\n`;
     csv += `Process Path,${state.selectedProcess}\n`;
     if (displaySub) csv += `Sub-Process,${displaySub}\n`;
-    csv += `Total Target,${showTargets ? TOTAL_TARGET + 's' : 'N/A'}\nDate,${new Date().toLocaleDateString()}\n\n`;
-
+    csv += `Total Target,${showTargets ? TOTAL_TARGET+'s' : 'N/A'}\nDate,${new Date().toLocaleDateString()}\n\n`;
     csv += 'Task,Target';
     for (let i = 1; i <= NUM_OBS; i++) csv += `,Observation ${i}`;
     csv += '\n';
-
     csv += `Start Time,—`;
     for (let i = 1; i <= NUM_OBS; i++) csv += `,${observations[i].startTime || ''}`;
     csv += '\n';
-
     TASKS.forEach((task, idx) => {
-      const targetDisplay = task.target > 0 ? task.target : 'N/A';
-      csv += `"${task.name}",${targetDisplay}`;
-      for (let i = 1; i <= NUM_OBS; i++) {
-        const v = observations[i].tasks[idx];
-        csv += `,${v !== undefined ? v : ''}`;
-      }
+      csv += `"${task.name}",${task.target > 0 ? task.target : 'N/A'}`;
+      for (let i = 1; i <= NUM_OBS; i++) { const v = observations[i].tasks[idx]; csv += `,${v !== undefined ? v : ''}`; }
       csv += '\n';
     });
-
     csv += `End Time,—`;
     for (let i = 1; i <= NUM_OBS; i++) csv += `,${observations[i].endTime || ''}`;
     csv += '\n';
-
     csv += `Total,${showTargets ? TOTAL_TARGET : 'N/A'}`;
     for (let i = 1; i <= NUM_OBS; i++) csv += `,${observations[i].total !== null ? observations[i].total : ''}`;
     csv += '\n';
-
     csv += `\nCoaching Notes\n"${assoc.coachingNotes.replace(/"/g, '""')}"\n`;
 
     const blob = new Blob([csv], { type: 'text/csv' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     const filenameSub = displaySub ? `_${displaySub}` : '';
-    a.download = `TaktTimeStudy_${assoc.name.replace(/\s+/g, '_')}_${state.selectedProcess}${filenameSub}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `TaktTimeStudy_${assoc.name.replace(/\s+/g,'_')}_${state.selectedProcess}${filenameSub}_${new Date().toISOString().slice(0,10)}.csv`;
     a.click();
     showToast('📥 CSV downloaded');
   }
@@ -1696,41 +1550,21 @@
     const observations = getObs();
     const displaySub = getDisplaySubProcess();
 
-    let text = `TAKT TIME STUDY — SNA4\n`;
-    text += `Auditor: ${appData.auditorName} (${appData.auditorLogin})\n`;
-    text += `Associate: ${assoc.name} (${assoc.login})\n`;
-    text += `Process: ${state.selectedProcess}`;
+    let text = `TAKT TIME STUDY — SNA4\nAuditor: ${appData.auditorName} (${appData.auditorLogin})\nAssociate: ${assoc.name} (${assoc.login})\nProcess: ${state.selectedProcess}`;
     if (displaySub) text += ` › ${displaySub}`;
-    text += `\n`;
-    text += `Date: ${new Date().toLocaleString()}\n`;
-    text += `Target Total: ${showTargets ? TOTAL_TARGET + 's' : 'N/A'}\n\n`;
+    text += `\nDate: ${new Date().toLocaleString()}\nTarget Total: ${showTargets ? TOTAL_TARGET+'s' : 'N/A'}\n\n`;
 
     for (let i = 1; i <= NUM_OBS; i++) {
       const o = observations[i];
       if (o.tasks.length === 0) continue;
-      text += `── Observation ${i} ──\n`;
-      text += `Start: ${o.startTime || 'N/A'}\n`;
+      text += `── Observation ${i} ──\nStart: ${o.startTime || 'N/A'}\n`;
       TASKS.forEach((t, idx) => {
         const v = o.tasks[idx];
-        if (v !== undefined) {
-          if (t.target > 0) {
-            text += `  ${v <= t.target ? '✅' : '⚠️'} ${t.name}: ${v}s (target: ${t.target}s)\n`;
-          } else {
-            text += `  ⏱ ${t.name}: ${v}s\n`;
-          }
-        }
+        if (v !== undefined) text += `  ${t.target > 0 ? (v <= t.target ? '✅' : '⚠️') : '⏱'} ${t.name}: ${v}s${t.target > 0 ? ' (target: '+t.target+'s)' : ''}\n`;
       });
-      text += `End: ${o.endTime || 'N/A'}\n`;
-      if (showTargets) {
-        text += `Total: ${o.total}s (target: ${TOTAL_TARGET}s)\n\n`;
-      } else {
-        text += `Total: ${o.total}s\n\n`;
-      }
+      text += `End: ${o.endTime || 'N/A'}\nTotal: ${o.total}s${showTargets ? ' (target: '+TOTAL_TARGET+'s)' : ''}\n\n`;
     }
-
-    if (assoc.coachingNotes) {
-      text += `── Coaching Notes ──\n${assoc.coachingNotes}\n`;
-    }
+    if (assoc.coachingNotes) text += `── Coaching Notes ──\n${assoc.coachingNotes}\n`;
 
     navigator.clipboard.writeText(text);
     showToast('📋 Copied to clipboard');
@@ -1772,31 +1606,21 @@
   }
 
   fab.onclick = togglePanel;
-  backdrop.onclick = (e) => {
-    if (e.target === backdrop && !state.isRunning) togglePanel();
-  };
+  backdrop.onclick = (e) => { if (e.target === backdrop && !state.isRunning) togglePanel(); };
 
-  // ═══════════════════════════════════════════════════════
-  // KEYBOARD SHORTCUTS
-  // ═══════════════════════════════════════════════════════
   document.addEventListener('keydown', (e) => {
     if (e.altKey && e.key === 't') { e.preventDefault(); togglePanel(); }
     if (e.code === 'Space' && state.isOpen && state.isRunning) {
       const tag = document.activeElement.tagName;
-      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
-        e.preventDefault();
-        handleStartStop();
-      }
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') { e.preventDefault(); handleStartStop(); }
     }
     if (e.key === 'Escape' && state.isOpen) {
-      // Close search overlay first
       const searchOverlay = document.getElementById('takt-search-overlay');
       const addOverlay = document.querySelector('.takt-add-overlay');
       if (searchOverlay) { searchOverlay.remove(); return; }
       if (addOverlay) { addOverlay.remove(); return; }
       if (!state.isRunning) togglePanel();
     }
-    // Arrow keys for associate navigation
     if (state.isOpen && !state.isRunning && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
       if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); navigateAssociate(-1); }
       if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); navigateAssociate(1); }
@@ -1809,5 +1633,8 @@
   loadData();
   updateBadge();
 
-  console.log('✅ SNA4 Takt Time Study Timer v8.0 loaded! Alt+T to open. Alt+←/→ to navigate associates.');
+  // Auto-sync every 60 seconds when panel is open
+  setInterval(() => { if (state.isOpen && !state.isRunning) syncFromSheets(); }, 60000);
+
+  console.log('✅ SNA4 Takt Time Study Timer v9.0 loaded with Google Sheets sync! Alt+T to open.');
 })();
