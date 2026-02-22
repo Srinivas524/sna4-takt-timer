@@ -26,9 +26,18 @@
       if (!data || !data.latestVersion) return;
       const latest = data.latestVersion.toString().trim();
       const current = CURRENT_VERSION.toString().trim();
-      if (latest !== current) {
-        showUpdateBanner(latest);
+
+      // Already on latest — clear any dismissed flag so future updates show fresh
+      if (latest === current) {
+        localStorage.removeItem('sna4_dismissed_version');
+        return;
       }
+
+      // User already dismissed THIS version's banner — don't show again
+      const dismissed = localStorage.getItem('sna4_dismissed_version');
+      if (dismissed === latest) return;
+
+      showUpdateBanner(latest);
     }).catch(() => {});
   }
 
@@ -52,7 +61,11 @@
     `;
     document.body.appendChild(banner);
     banner.onclick = (e) => {
-      if (e.target.id === 'takt-banner-close') { banner.remove(); return; }
+      if (e.target.id === 'takt-banner-close') {
+        localStorage.setItem('sna4_dismissed_version', latestVersion);
+        banner.remove();
+        return;
+      }
       window.open(INSTALL_URL, '_blank');
     };
   }
