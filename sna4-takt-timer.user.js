@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SNA4 Takt Time Study Timer
 // @namespace    http://tampermonkey.net/
-// @version      9.1
+// @version      9.2
 // @description  Floating time study timer with associate management and Google Sheets sync
 // @match        https://ramdos.org/*
 // @grant        GM_xmlhttpRequest
@@ -18,6 +18,44 @@
   // GOOGLE SHEETS API
   // ═══════════════════════════════════════════════════════
   const API_URL = 'https://script.google.com/macros/s/AKfycbxVHsKAFccb80Pl6FhOsuMTcAEwZACFVPlxgwjb56UueO-_F_Q6xe-pYqJsOy4UUxni/exec';
+  const CURRENT_VERSION = '9.2';
+  const INSTALL_URL = 'https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js';
+
+  function checkForUpdate() {
+    fetchAPI('getVersion').then((data) => {
+      if (!data || !data.latestVersion) return;
+      const latest = data.latestVersion.toString().trim();
+      const current = CURRENT_VERSION.toString().trim();
+      if (latest !== current) {
+        showUpdateBanner(latest);
+      }
+    }).catch(() => {});
+  }
+
+  function showUpdateBanner(latestVersion) {
+    const existing = document.getElementById('takt-update-banner');
+    if (existing) return;
+    const banner = document.createElement('div');
+    banner.id = 'takt-update-banner';
+    banner.style.cssText = `
+      position: fixed; top: 0; left: 0; right: 0; z-index: 9999999;
+      background: linear-gradient(135deg, #f59e0b, #d97706);
+      color: white; font-family: 'Inter', sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      gap: 12px; padding: 10px 24px; font-size: 13px; font-weight: 700;
+      box-shadow: 0 4px 20px rgba(245,158,11,0.4); cursor: pointer;
+    `;
+    banner.innerHTML = `
+      <span>🚀 New version available (v${latestVersion}) — click here to update</span>
+      <span style="background:rgba(255,255,255,0.25);padding:3px 12px;border-radius:6px;font-size:11px;">Click to Install</span>
+      <span id="takt-banner-close" style="margin-left:8px;opacity:0.7;font-size:16px;cursor:pointer;">✕</span>
+    `;
+    document.body.appendChild(banner);
+    banner.onclick = (e) => {
+      if (e.target.id === 'takt-banner-close') { banner.remove(); return; }
+      window.open(INSTALL_URL, '_blank');
+    };
+  }
 
   function callAPI(payload) {
     return new Promise((resolve, reject) => {
@@ -1626,6 +1664,7 @@
   // ═══════════════════════════════════════════════════════
   loadData();
   updateBadge();
+  checkForUpdate();
 
   // Auto-sync every 60 seconds when panel is open
   setInterval(() => { if (state.isOpen && !state.isRunning) syncFromSheets(); }, 60000);
