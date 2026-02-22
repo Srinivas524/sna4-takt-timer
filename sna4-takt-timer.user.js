@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      8.0
 // @description  Floating time study timer with associate management and process path selection
-// @match        https://fclm-portal.amazon.com/*
+// @match        https://ramdos.org/*
 // @grant        none
 // @updateURL    https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js
 // @downloadURL  https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js
@@ -808,7 +808,6 @@
     const showSub = hasSubPaths(state.selectedProcess);
     const displaySub = getDisplaySubProcess();
 
-    // ── HEADER ──
     let subtitlePath = state.selectedProcess;
     if (displaySub) subtitlePath += ' › ' + displaySub;
     if (hasAssociate) subtitlePath += ' › ' + assoc.name;
@@ -830,7 +829,6 @@
         </div>
       </div>`;
 
-    // ── AUDITOR BAR ──
     const auditorBarHTML = `
       <div class="takt-auditor-bar">
         <div class="takt-auditor-group">
@@ -847,7 +845,6 @@
         </div>
       </div>`;
 
-    // ── ASSOCIATE BAR ──
     let assocCardHTML = '';
     if (hasAssociate) {
       const completed = getCompletedCount(assoc);
@@ -880,7 +877,6 @@
         </div>
       </div>`;
 
-    // If no associate, show empty state
     if (!hasAssociate) {
       panel.innerHTML = headerHTML + auditorBarHTML + assocBarHTML + `
         <div class="takt-empty-state">
@@ -901,7 +897,6 @@
       return;
     }
 
-    // ── PROCESS BAR ──
     let processOptions = '';
     Object.keys(PROCESS_PATHS).forEach(p => {
       processOptions += `<option value="${p}" ${p === state.selectedProcess ? 'selected' : ''}>${p}</option>`;
@@ -948,7 +943,6 @@
         <div class="takt-process-tag">${tagText}</div>
       </div>`;
 
-    // ── CONTROL BAR ──
     let pillsHTML = '';
     for (let i = 1; i <= NUM_OBS; i++) {
       const isSel = state.selectedObs === i;
@@ -976,7 +970,6 @@
         <button class="takt-btn-action clear-btn" id="takt-clear-btn" ${!state.selectedObs ? 'disabled style="opacity:0.4;"' : ''}>🔄 Clear</button>
       </div>`;
 
-    // ── TIMER BAR ──
     let timerBarHTML = '';
     if (state.isRunning) {
       let taskLabel = state.currentTaskIndex >= 0
@@ -992,10 +985,8 @@
       timerBarHTML = `<div class="takt-timer-bar hidden"></div>`;
     }
 
-    // ── TABLE ──
     let tableRowsHTML = '';
 
-    // Start time row
     tableRowsHTML += `<tr class="row-start-time"><td style="padding-left:24px;">⏰ Start Time</td><td class="target-col">—</td>`;
     for (let i = 1; i <= NUM_OBS; i++) {
       const o = observations[i];
@@ -1004,7 +995,6 @@
     }
     tableRowsHTML += `</tr>`;
 
-    // Task rows
     TASKS.forEach((task, idx) => {
       const isCurrentTask = state.isRunning && state.currentTaskIndex === idx;
       const targetDisplay = task.target > 0 ? `${task.target}s` : 'N/A';
@@ -1039,7 +1029,6 @@
       tableRowsHTML += `</tr>`;
     });
 
-    // End time row
     tableRowsHTML += `<tr class="row-end-time"><td style="padding-left:24px;">⏰ End Time</td><td class="target-col">—</td>`;
     for (let i = 1; i <= NUM_OBS; i++) {
       const o = observations[i];
@@ -1048,7 +1037,6 @@
     }
     tableRowsHTML += `</tr>`;
 
-    // Total row
     const totalTargetDisplay = showTargets ? `${TOTAL_TARGET}s` : 'N/A';
     tableRowsHTML += `<tr class="row-total"><td style="padding-left:24px;">📊 Total</td><td class="target-col" style="font-weight:800;color:#1e293b;">${totalTargetDisplay}</td>`;
     for (let i = 1; i <= NUM_OBS; i++) {
@@ -1086,7 +1074,6 @@
         </table>
       </div>`;
 
-    // ── COACHING NOTES ──
     const coachingCollapsed = !state.coachingExpanded;
     const coachingHTML = `
       <div class="takt-coaching-section">
@@ -1099,7 +1086,6 @@
         </div>
       </div>`;
 
-    // ── PROGRESS ──
     const progressHTML = `
       <div class="takt-progress-section ${!state.selectedObs || (!state.isRunning && !isComplete && tasksDone === 0) ? 'hidden' : ''}">
         <div class="takt-progress-bar-bg">
@@ -1108,7 +1094,6 @@
         <div class="takt-progress-text">${tasksDone}/${totalTasks} Tasks (${Math.round(progress)}%)</div>
       </div>`;
 
-    // ── FOOTER ──
     let statusText = 'Select an observation to begin';
     if (state.isRunning) {
       statusText = `Recording Obs ${state.selectedObs} — Task ${(obs ? obs.tasks.length : 0) + (state.currentTaskIndex >= 0 ? 1 : 0)} of ${totalTasks}`;
@@ -1134,7 +1119,6 @@
         <div class="takt-footer-status">${statusText} · Associate ${state.currentAssociateIndex + 1} of ${appData.associates.length}</div>
       </div>`;
 
-    // ── ASSEMBLE ──
     panel.innerHTML = headerHTML + auditorBarHTML + assocBarHTML + processBarHTML + controlBarHTML + timerBarHTML + tableHTML + coachingHTML + progressHTML + footerHTML;
 
     wireBaseEvents();
@@ -1142,34 +1126,22 @@
     wireTimerEvents();
   }
 
-  // ═══════════════════════════════════════════════════════
-  // ESCAPE HTML
-  // ═══════════════════════════════════════════════════════
   function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  // ═══════════════════════════════════════════════════════
-  // WIRE — BASE EVENTS
-  // ═══════════════════════════════════════════════════════
   function wireBaseEvents() {
     const closeBtn = document.getElementById('takt-close');
     const minBtn = document.getElementById('takt-minimize');
     if (closeBtn) closeBtn.onclick = togglePanel;
     if (minBtn) minBtn.onclick = togglePanel;
 
-    // Auditor inputs
     const audNameInput = document.getElementById('takt-auditor-name');
     const audLoginInput = document.getElementById('takt-auditor-login');
-    if (audNameInput) {
-      audNameInput.oninput = (e) => { appData.auditorName = e.target.value; saveData(); };
-    }
-    if (audLoginInput) {
-      audLoginInput.oninput = (e) => { appData.auditorLogin = e.target.value; saveData(); };
-    }
+    if (audNameInput) audNameInput.oninput = (e) => { appData.auditorName = e.target.value; saveData(); };
+    if (audLoginInput) audLoginInput.oninput = (e) => { appData.auditorLogin = e.target.value; saveData(); };
 
-    // Search & Add buttons
     const searchBtn = document.getElementById('takt-search-assoc');
     const addBtn = document.getElementById('takt-add-assoc');
     const emptyAddBtn = document.getElementById('takt-empty-add');
@@ -1177,17 +1149,14 @@
     if (addBtn) addBtn.onclick = () => showAddForm();
     if (emptyAddBtn) emptyAddBtn.onclick = () => showAddForm();
 
-    // Nav
     const prevBtn = document.getElementById('takt-nav-prev');
     const nextBtn = document.getElementById('takt-nav-next');
     if (prevBtn) prevBtn.onclick = () => navigateAssociate(-1);
     if (nextBtn) nextBtn.onclick = () => navigateAssociate(1);
 
-    // Delete associate
     const deleteBtn = document.getElementById('takt-delete-assoc');
     if (deleteBtn) deleteBtn.onclick = handleDeleteAssociate;
 
-    // Footer
     const exportBtn = document.getElementById('takt-export-csv');
     const copyBtn = document.getElementById('takt-copy-data');
     const clearAllBtn = document.getElementById('takt-clear-all');
@@ -1198,11 +1167,7 @@
     initDrag();
   }
 
-  // ═══════════════════════════════════════════════════════
-  // WIRE — ASSOCIATE EVENTS (when associate exists)
-  // ═══════════════════════════════════════════════════════
   function wireAssociateEvents() {
-    // Process dropdowns
     const processDd = document.getElementById('takt-process-dd');
     const subDd = document.getElementById('takt-sub-dd');
     if (processDd) {
@@ -1226,7 +1191,6 @@
       };
     }
 
-    // Obs pills
     panel.querySelectorAll('.takt-obs-pill').forEach(btn => {
       btn.onclick = () => {
         if (state.isRunning && state.selectedObs !== parseInt(btn.dataset.obs)) return;
@@ -1235,13 +1199,11 @@
       };
     });
 
-    // Start/Clear
     const startBtn = document.getElementById('takt-start-btn');
     const clearBtn = document.getElementById('takt-clear-btn');
     if (startBtn) startBtn.onclick = handleStartStop;
     if (clearBtn) clearBtn.onclick = handleClear;
 
-    // Coaching
     const coachToggle = document.getElementById('takt-coaching-toggle');
     const coachNotes = document.getElementById('takt-coaching-notes');
     if (coachToggle) {
@@ -1253,26 +1215,14 @@
     if (coachNotes) {
       coachNotes.oninput = (e) => {
         const assoc = getCurrentAssociate();
-        if (assoc) {
-          assoc.coachingNotes = e.target.value;
-          saveData();
-        }
+        if (assoc) { assoc.coachingNotes = e.target.value; saveData(); }
       };
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  // WIRE — TIMER EVENTS
-  // ═══════════════════════════════════════════════════════
-  function wireTimerEvents() {
-    // Timer updates handled by interval
-  }
+  function wireTimerEvents() {}
 
-  // ═══════════════════════════════════════════════════════
-  // SEARCH OVERLAY
-  // ═══════════════════════════════════════════════════════
   function showSearchOverlay() {
-    // Remove existing
     const existing = document.getElementById('takt-search-overlay');
     if (existing) { existing.remove(); return; }
 
@@ -1350,7 +1300,6 @@
       showAddForm(input.value);
     };
 
-    // Close on outside click
     setTimeout(() => {
       const closeHandler = (e) => {
         if (!overlay.contains(e.target) && e.target.id !== 'takt-search-assoc') {
@@ -1362,11 +1311,7 @@
     }, 100);
   }
 
-  // ═══════════════════════════════════════════════════════
-  // ADD FORM
-  // ═══════════════════════════════════════════════════════
   function showAddForm(prefillName) {
-    // Remove existing
     const existing = document.querySelector('.takt-add-overlay');
     if (existing) existing.remove();
 
@@ -1398,8 +1343,7 @@
     nameInput.focus();
 
     function validateForm() {
-      const valid = nameInput.value.trim().length > 0 && loginInput.value.trim().length > 0;
-      submitBtn.disabled = !valid;
+      submitBtn.disabled = !(nameInput.value.trim().length > 0 && loginInput.value.trim().length > 0);
     }
 
     nameInput.oninput = validateForm;
@@ -1416,18 +1360,10 @@
       }
     };
 
-    // Enter key support
-    loginInput.onkeydown = (e) => {
-      if (e.key === 'Enter' && !submitBtn.disabled) submitBtn.click();
-    };
-    nameInput.onkeydown = (e) => {
-      if (e.key === 'Enter') loginInput.focus();
-    };
+    loginInput.onkeydown = (e) => { if (e.key === 'Enter' && !submitBtn.disabled) submitBtn.click(); };
+    nameInput.onkeydown = (e) => { if (e.key === 'Enter') loginInput.focus(); };
   }
 
-  // ═══════════════════════════════════════════════════════
-  // DELETE ASSOCIATE
-  // ═══════════════════════════════════════════════════════
   function handleDeleteAssociate() {
     const assoc = getCurrentAssociate();
     if (!assoc || state.isRunning) return;
@@ -1449,9 +1385,6 @@
     );
   }
 
-  // ═══════════════════════════════════════════════════════
-  // DRAG
-  // ═══════════════════════════════════════════════════════
   function initDrag() {
     const handle = document.getElementById('takt-drag-handle');
     if (!handle) return;
@@ -1477,9 +1410,6 @@
     };
   }
 
-  // ═══════════════════════════════════════════════════════
-  // START / RECORD
-  // ═══════════════════════════════════════════════════════
   function handleStartStop() {
     if (!state.selectedObs || !getCurrentAssociate()) return;
     const config = getConfig();
@@ -1542,9 +1472,6 @@
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  // LIVE TIMER
-  // ═══════════════════════════════════════════════════════
   function startElapsedTimer() {
     stopElapsedTimer();
     state.elapsedInterval = setInterval(() => {
@@ -1565,9 +1492,6 @@
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  // CLEAR
-  // ═══════════════════════════════════════════════════════
   function handleClear() {
     if (!state.selectedObs || !getCurrentAssociate()) return;
     showConfirm(
@@ -1630,9 +1554,6 @@
     document.getElementById('takt-cfm-yes').onclick = () => { overlay.remove(); onConfirm(); };
   }
 
-  // ═══════════════════════════════════════════════════════
-  // EXPORT
-  // ═══════════════════════════════════════════════════════
   function exportCSV() {
     const assoc = getCurrentAssociate();
     if (!assoc) return;
@@ -1701,15 +1622,13 @@
     text += `Associate: ${assoc.name} (${assoc.login})\n`;
     text += `Process: ${state.selectedProcess}`;
     if (displaySub) text += ` › ${displaySub}`;
-    text += `\n`;
-    text += `Date: ${new Date().toLocaleString()}\n`;
+    text += `\nDate: ${new Date().toLocaleString()}\n`;
     text += `Target Total: ${showTargets ? TOTAL_TARGET + 's' : 'N/A'}\n\n`;
 
     for (let i = 1; i <= NUM_OBS; i++) {
       const o = observations[i];
       if (o.tasks.length === 0) continue;
-      text += `── Observation ${i} ──\n`;
-      text += `Start: ${o.startTime || 'N/A'}\n`;
+      text += `── Observation ${i} ──\nStart: ${o.startTime || 'N/A'}\n`;
       TASKS.forEach((t, idx) => {
         const v = o.tasks[idx];
         if (v !== undefined) {
@@ -1721,24 +1640,15 @@
         }
       });
       text += `End: ${o.endTime || 'N/A'}\n`;
-      if (showTargets) {
-        text += `Total: ${o.total}s (target: ${TOTAL_TARGET}s)\n\n`;
-      } else {
-        text += `Total: ${o.total}s\n\n`;
-      }
+      text += showTargets ? `Total: ${o.total}s (target: ${TOTAL_TARGET}s)\n\n` : `Total: ${o.total}s\n\n`;
     }
 
-    if (assoc.coachingNotes) {
-      text += `── Coaching Notes ──\n${assoc.coachingNotes}\n`;
-    }
+    if (assoc.coachingNotes) text += `── Coaching Notes ──\n${assoc.coachingNotes}\n`;
 
     navigator.clipboard.writeText(text);
     showToast('📋 Copied to clipboard');
   }
 
-  // ═══════════════════════════════════════════════════════
-  // BADGE
-  // ═══════════════════════════════════════════════════════
   function updateBadge() {
     let totalCompleted = 0;
     appData.associates.forEach(assoc => {
@@ -1753,9 +1663,6 @@
     else { badge.style.display = 'none'; }
   }
 
-  // ═══════════════════════════════════════════════════════
-  // TOGGLE
-  // ═══════════════════════════════════════════════════════
   function togglePanel() {
     state.isOpen = !state.isOpen;
     if (state.isOpen) {
@@ -1776,9 +1683,6 @@
     if (e.target === backdrop && !state.isRunning) togglePanel();
   };
 
-  // ═══════════════════════════════════════════════════════
-  // KEYBOARD SHORTCUTS
-  // ═══════════════════════════════════════════════════════
   document.addEventListener('keydown', (e) => {
     if (e.altKey && e.key === 't') { e.preventDefault(); togglePanel(); }
     if (e.code === 'Space' && state.isOpen && state.isRunning) {
@@ -1789,23 +1693,18 @@
       }
     }
     if (e.key === 'Escape' && state.isOpen) {
-      // Close search overlay first
       const searchOverlay = document.getElementById('takt-search-overlay');
       const addOverlay = document.querySelector('.takt-add-overlay');
       if (searchOverlay) { searchOverlay.remove(); return; }
       if (addOverlay) { addOverlay.remove(); return; }
       if (!state.isRunning) togglePanel();
     }
-    // Arrow keys for associate navigation
     if (state.isOpen && !state.isRunning && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
       if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); navigateAssociate(-1); }
       if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); navigateAssociate(1); }
     }
   });
 
-  // ═══════════════════════════════════════════════════════
-  // INIT
-  // ═══════════════════════════════════════════════════════
   loadData();
   updateBadge();
 
