@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SNA4 Takt Time Study Timer
 // @namespace    http://tampermonkey.net/
-// @version      9.0
+// @version      9.1
 // @description  Floating time study timer with associate management and Google Sheets sync
 // @match        https://ramdos.org/*
 // @grant        GM_xmlhttpRequest
@@ -949,10 +949,6 @@
         </div>`;
     }
 
-    let chipsHTML = showTargets
-      ? TASKS.map(t => `<span class="takt-target-chip">${t.name}: ${t.target}s</span>`).join('')
-      : `<span class="takt-target-chip no-target">⚠ No target times set</span>`;
-
     const processBarHTML = `
       <div class="takt-process-bar">
         <div class="takt-process-group">
@@ -960,8 +956,6 @@
           <select class="takt-process-select" id="takt-process-dd" ${state.isRunning ? 'disabled' : ''}>${processOptions}</select>
         </div>
         ${subDropdownHTML}
-        <div class="takt-target-summary">${chipsHTML}</div>
-        <div class="takt-process-tag">${totalTasks} Tasks · ${showTargets ? TOTAL_TARGET + 's Target' : 'No Target'}</div>
       </div>`;
 
     let pillsHTML = '';
