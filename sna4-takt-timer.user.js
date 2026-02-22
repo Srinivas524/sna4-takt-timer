@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SNA4 Takt Time Study Timer
 // @namespace    http://tampermonkey.net/
-// @version      9.3
+// @version      9.4
 // @description  Floating time study timer with associate management and Google Sheets sync
 // @match        https://ramdos.org/*
 // @match        https://fclm-portal.amazon.com/*
@@ -19,7 +19,7 @@
   // GOOGLE SHEETS API
   // ═══════════════════════════════════════════════════════
   const API_URL = 'https://script.google.com/macros/s/AKfycbxVHsKAFccb80Pl6FhOsuMTcAEwZACFVPlxgwjb56UueO-_F_Q6xe-pYqJsOy4UUxni/exec';
-  const CURRENT_VERSION = '9.3';
+  const CURRENT_VERSION = '9.4';
   const INSTALL_URL = 'https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js';
 
   function checkForUpdate() {
@@ -956,7 +956,7 @@
           <div class="takt-assoc-avatar">${getInitials(assoc.name)}</div>
           <div class="takt-assoc-info">
             <div class="takt-assoc-name">${escapeHtml(assoc.name)}</div>
-            <div class="takt-assoc-login">${escapeHtml(assoc.login)}</div>
+            <div class="takt-assoc-login">${escapeHtml(assoc.login)}${assoc.lastObservedBy ? ` · <span style="color:#f59e0b;font-weight:700;">Last observed by: ${escapeHtml(assoc.lastObservedBy)}</span>` : ''}</div>
           </div>
           <div class="takt-assoc-counter">${completed}/${NUM_OBS} Done</div>
           <button class="takt-assoc-delete-btn" id="takt-delete-assoc" title="Remove associate">✕</button>
@@ -1488,6 +1488,12 @@
       if (obs.tasks.length >= TASKS.length) {
         obs.endTime = formatTime(new Date());
         obs.total = obs.tasks.reduce((a, b) => a + b, 0);
+
+        // Stamp who last observed this associate
+        const currentAssoc = getCurrentAssociate();
+        if (currentAssoc && appData.auditorLogin) {
+          currentAssoc.lastObservedBy = appData.auditorLogin;
+        }
         state.isRunning = false;
         state.currentTaskIndex = -1;
         fab.classList.remove('active');
