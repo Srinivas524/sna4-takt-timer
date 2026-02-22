@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SNA4 Takt Time Study Timer
 // @namespace    http://tampermonkey.net/
-// @version      9.2
+// @version      9.3
 // @description  Floating time study timer with associate management and Google Sheets sync
 // @match        https://ramdos.org/*
 // @grant        GM_xmlhttpRequest
@@ -18,7 +18,7 @@
   // GOOGLE SHEETS API
   // ═══════════════════════════════════════════════════════
   const API_URL = 'https://script.google.com/macros/s/AKfycbxVHsKAFccb80Pl6FhOsuMTcAEwZACFVPlxgwjb56UueO-_F_Q6xe-pYqJsOy4UUxni/exec';
-  const CURRENT_VERSION = '9.2';
+  const CURRENT_VERSION = '9.3';
   const INSTALL_URL = 'https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js';
 
   function checkForUpdate() {
@@ -109,17 +109,18 @@
   // ═══════════════════════════════════════════════════════
   // PROCESS PATH CONFIGURATION
   // ═══════════════════════════════════════════════════════
-  function buildPickTasks(locate, move, drive) {
+  function buildPickTasks(read, locate, move, drive) {
     const tasks = [
+      { name: "Read the scanner", target: read },
       { name: "Time to locate item in bin", target: locate },
       { name: "Move item from bin to cage", target: move },
       { name: "Drive time from bin to bin", target: drive }
     ];
-    return { tasks, totalTarget: locate + move + drive };
+    return { tasks, totalTarget: read + locate + move + drive };
   }
 
   function buildPackTasks(t1, t2, t3, t4, t5, t6, t7, t8, t9) {
-    const tasks = [
+    const allTasks = [
       { name: "Scan cage", target: t1 },
       { name: "Scan item / move item to station", target: t2 },
       { name: "Read screen", target: t3 },
@@ -130,34 +131,49 @@
       { name: "Scan / add SPOO", target: t8 },
       { name: "Push item onto conveyor", target: t9 }
     ];
-    return { tasks, totalTarget: t1+t2+t3+t4+t5+t6+t7+t8+t9 };
+    // Filter out tasks with 0 target — they are not applicable
+    const tasks = allTasks.filter(t => t.target > 0);
+    const totalTarget = tasks.reduce((a, t) => a + t.target, 0);
+    return { tasks, totalTarget };
   }
 
-  function buildStowTasks(stowToStow, cageChangeover) {
+  function buildStowTasks(locate, openNet, grab, stow, confirm, changeover, drive) {
     const tasks = [
-      { name: "Stow to stow", target: stowToStow },
-      { name: "Cage change over", target: cageChangeover }
+      { name: "Time to locate bin", target: locate },
+      { name: "Open cage netting", target: openNet },
+      { name: "Grab item from cage", target: grab },
+      { name: "Stow unit into bin", target: stow },
+      { name: "Confirm stow on scanner", target: confirm },
+      { name: "Cage change over", target: changeover },
+      { name: "Drive time from bin to bin", target: drive }
     ];
-    return { tasks, totalTarget: stowToStow + cageChangeover };
+    return { tasks, totalTarget: locate + openNet + grab + stow + confirm + changeover + drive };
+  }
+
+  function buildDockTasks() {
+    return { tasks: [], totalTarget: 0, comingSoon: true };
   }
 
   const NUM_OBS = 5;
 
   const PROCESS_PATHS = {
     "Pick": {
-      "Singles": buildPickTasks(8, 15, 180),
-      "VNA 1": buildPickTasks(14, 9, 60),
-      "VNA 2": buildPickTasks(14, 9, 90),
-      "Noncon/Bod": buildPickTasks(14, 15, 180),
-      "Multi": buildPickTasks(9, 9, 180)
+      "Singles":    buildPickTasks(10, 10, 12, 120),
+      "VNA 1":      buildPickTasks(10, 8,  8,  60),
+      "VNA 2":      buildPickTasks(10, 8,  12, 120),
+      "Noncon/Bod": buildPickTasks(10, 8,  15, 180),
+      "Multi":      buildPickTasks(10, 8,  8,  180)
     },
     "Pack": {
-      "Singles/VNA": buildPackTasks(0,0,0,0,0,0,0,0,0),
-      "Multies": buildPackTasks(0,0,0,0,0,0,0,0,0),
-      "BOD/Noncon": buildPackTasks(0,0,0,0,0,0,0,0,0)
+      "Singles/VNA": buildPackTasks(3, 5, 9, 20, 9,  9, 12, 5, 3),
+      "Multies":     buildPackTasks(3, 5, 3, 27, 9,  5, 14, 3, 5),
+      "BOD/Noncon":  buildPackTasks(6, 4, 8, 0,  0,  5, 0,  5, 5)
+    },
+    "Dock": {
+      "_default": buildDockTasks()
     },
     "Stow": {
-      "_default": buildStowTasks(300, 480)
+      "_default": buildStowTasks(60, 3, 5, 5, 2, 480, 120)
     }
   };
 
@@ -1045,6 +1061,21 @@
           : 'Click button to record <span class="task-name">Start Time</span>'
         }</div>
       </div>` : `<div class="takt-timer-bar hidden"></div>`;
+
+    // Dock coming soon state
+    if (config.comingSoon) {
+      const comingSoonHTML = `
+        <div class="takt-empty-state">
+          <div class="takt-empty-state-icon">🚧</div>
+          <div class="takt-empty-state-title">Dock Tasks Coming Soon</div>
+          <div class="takt-empty-state-msg">Target times for the Dock process are yet to be determined. Check back soon!</div>
+        </div>`;
+      panel.innerHTML = headerHTML + syncBarHTML + auditorBarHTML + assocBarHTML + processBarHTML + comingSoonHTML + footerHTML;
+      wireBaseEvents();
+      wireAssociateEvents();
+      updateSyncBadge();
+      return;
+    }
 
     let tableRowsHTML = '';
     tableRowsHTML += `<tr class="row-start-time"><td style="padding-left:24px;">⏰ Start Time</td><td class="target-col">—</td>`;
