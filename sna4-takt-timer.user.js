@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SNA4 Takt Time Study Timer
 // @namespace    http://tampermonkey.net/
-// @version      9.5
+// @version      9.6
 // @description  Floating time study timer with associate management and Google Sheets sync
 // @match        https://ramdos.org/*
 // @match        https://fclm-portal.amazon.com/*
@@ -19,7 +19,7 @@
   // GOOGLE SHEETS API
   // ═══════════════════════════════════════════════════════
   const API_URL = 'https://script.google.com/macros/s/AKfycbxVHsKAFccb80Pl6FhOsuMTcAEwZACFVPlxgwjb56UueO-_F_Q6xe-pYqJsOy4UUxni/exec';
-  const CURRENT_VERSION = '9.5';
+  const CURRENT_VERSION = '9.6';
   const INSTALL_URL = 'https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js';
 
   function checkForUpdate() {
@@ -1082,21 +1082,6 @@
         }</div>
       </div>` : `<div class="takt-timer-bar hidden"></div>`;
 
-    // Dock coming soon state
-    if (config.comingSoon) {
-      const comingSoonHTML = `
-        <div class="takt-empty-state">
-          <div class="takt-empty-state-icon">🚧</div>
-          <div class="takt-empty-state-title">Dock Tasks Coming Soon</div>
-          <div class="takt-empty-state-msg">Target times for the Dock process are yet to be determined. Check back soon!</div>
-        </div>`;
-      panel.innerHTML = headerHTML + syncBarHTML + auditorBarHTML + assocBarHTML + processBarHTML + comingSoonHTML + footerHTML;
-      wireBaseEvents();
-      wireAssociateEvents();
-      updateSyncBadge();
-      return;
-    }
-
     let tableRowsHTML = '';
     tableRowsHTML += `<tr class="row-start-time"><td style="padding-left:24px;">⏰ Start Time</td><td class="target-col">—</td>`;
     for (let i = 1; i <= NUM_OBS; i++) {
@@ -1191,6 +1176,21 @@
         </div>
         <div class="takt-footer-status">${statusText} · Associate ${state.currentAssociateIndex + 1} of ${appData.associates.length}</div>
       </div>`;
+
+    // Dock coming soon state — checked AFTER all HTML is built
+    if (config.comingSoon) {
+      const comingSoonHTML = `
+        <div class="takt-empty-state">
+          <div class="takt-empty-state-icon">🚧</div>
+          <div class="takt-empty-state-title">Dock Tasks Coming Soon</div>
+          <div class="takt-empty-state-msg">Target times for the Dock process are yet to be determined. Check back soon!</div>
+        </div>`;
+      panel.innerHTML = headerHTML + syncBarHTML + auditorBarHTML + assocBarHTML + processBarHTML + comingSoonHTML + footerHTML;
+      wireBaseEvents();
+      wireAssociateEvents();
+      updateSyncBadge();
+      return;
+    }
 
     panel.innerHTML = headerHTML + syncBarHTML + auditorBarHTML + assocBarHTML + processBarHTML + controlBarHTML + timerBarHTML + tableHTML + coachingHTML + progressHTML + footerHTML;
 
