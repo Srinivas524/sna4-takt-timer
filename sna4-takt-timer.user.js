@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SNA4 Takt Time Study Timer
 // @namespace    http://tampermonkey.net/
-// @version      9.4
+// @version      9.5
 // @description  Floating time study timer with associate management and Google Sheets sync
 // @match        https://ramdos.org/*
 // @match        https://fclm-portal.amazon.com/*
@@ -19,7 +19,7 @@
   // GOOGLE SHEETS API
   // ═══════════════════════════════════════════════════════
   const API_URL = 'https://script.google.com/macros/s/AKfycbxVHsKAFccb80Pl6FhOsuMTcAEwZACFVPlxgwjb56UueO-_F_Q6xe-pYqJsOy4UUxni/exec';
-  const CURRENT_VERSION = '9.4';
+  const CURRENT_VERSION = '9.5';
   const INSTALL_URL = 'https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js';
 
   function checkForUpdate() {
@@ -219,6 +219,27 @@
   // PERSISTENCE — LOCAL + SHEETS
   // ═══════════════════════════════════════════════════════
 
+  // Auditor info is local only — never goes to Sheets
+  function saveAuditorLocally() {
+    try {
+      localStorage.setItem('sna4_auditor', JSON.stringify({
+        auditorName: appData.auditorName,
+        auditorLogin: appData.auditorLogin
+      }));
+    } catch (e) { console.warn('Auditor local save failed:', e); }
+  }
+
+  function loadAuditorLocally() {
+    try {
+      const raw = localStorage.getItem('sna4_auditor');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        appData.auditorName = parsed.auditorName || '';
+        appData.auditorLogin = parsed.auditorLogin || '';
+      }
+    } catch (e) { console.warn('Auditor local load failed:', e); }
+  }
+
   // Always save locally first (instant), then push to Sheets
   function saveData() {
     try {
@@ -228,28 +249,37 @@
   }
 
   function loadData() {
-    // Load from local cache first (instant)
+    // Load auditor info from local storage first (personal to this machine)
+    loadAuditorLocally();
+
+    // Load associate data from local cache
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        appData = { ...appData, ...parsed };
+        // Only load associates from cache, not auditor fields
+        if (parsed.associates) appData.associates = parsed.associates;
         if (appData.associates.length > 0) {
           state.currentAssociateIndex = 0;
         }
       }
     } catch (e) { console.warn('Local load failed:', e); }
 
-    // Then try to get latest from Sheets (may override local)
+    // Then sync latest associates from Sheets
     syncFromSheets();
   }
 
-  // Push full appData to Google Sheets
+  // Push full appData to Google Sheets — auditor fields excluded
   function syncToSheets() {
     state.syncStatus = 'syncing';
     updateSyncBadge();
 
-    callAPI({ action: 'saveAll', data: appData })
+    // Never send auditor name/login to Sheets — strip them out
+    const payload = {
+      associates: appData.associates
+    };
+
+    callAPI({ action: 'saveAll', data: payload })
       .then(() => {
         state.syncStatus = 'synced';
         state.lastSynced = new Date().toLocaleTimeString();
@@ -262,25 +292,16 @@
       });
   }
 
-  // Pull latest data from Google Sheets
+  // Pull latest data from Google Sheets — only updates associates, never auditor fields
   function syncFromSheets() {
     state.syncStatus = 'syncing';
     updateSyncBadge();
 
     fetchAPI('getAll')
       .then((data) => {
-        if (data && data.auditorName !== undefined) {
-          // Merge sheet data — sheet is source of truth for associates
-          // but keep local auditor name if sheet is empty
-          if (data.associates && data.associates.length > 0) {
-            appData.associates = data.associates;
-          }
-          if (data.auditorName) appData.auditorName = data.auditorName;
-          if (data.auditorLogin) appData.auditorLogin = data.auditorLogin;
-
-          // Persist merged data locally
+        if (data && data.associates && data.associates.length > 0) {
+          appData.associates = data.associates;
           localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
-
           if (appData.associates.length > 0 && state.currentAssociateIndex < 0) {
             state.currentAssociateIndex = 0;
           }
@@ -288,8 +309,6 @@
         state.syncStatus = 'synced';
         state.lastSynced = new Date().toLocaleTimeString();
         updateSyncBadge();
-
-        // Re-render if panel is open
         if (state.isOpen) renderPanel();
       })
       .catch((err) => {
@@ -1191,8 +1210,8 @@
 
     const audNameInput = document.getElementById('takt-auditor-name');
     const audLoginInput = document.getElementById('takt-auditor-login');
-    if (audNameInput) audNameInput.oninput = (e) => { appData.auditorName = e.target.value; saveData(); };
-    if (audLoginInput) audLoginInput.oninput = (e) => { appData.auditorLogin = e.target.value; saveData(); };
+    if (audNameInput) audNameInput.oninput = (e) => { appData.auditorName = e.target.value; saveAuditorLocally(); };
+    if (audLoginInput) audLoginInput.oninput = (e) => { appData.auditorLogin = e.target.value; saveAuditorLocally(); };
 
     const searchBtn = document.getElementById('takt-search-assoc');
     const addBtn = document.getElementById('takt-add-assoc');
