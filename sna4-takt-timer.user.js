@@ -4,6 +4,7 @@
 // @version      9.3
 // @description  Floating time study timer with associate management and Google Sheets sync
 // @match        https://ramdos.org/*
+// @match        https://fclm-portal.amazon.com/*
 // @grant        GM_xmlhttpRequest
 // @connect      script.google.com
 // @connect      script.googleusercontent.com
