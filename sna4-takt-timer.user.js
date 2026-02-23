@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SNA4 Takt Time Study Timer
 // @namespace    http://tampermonkey.net/
-// @version      9.9
+// @version      10.1
 // @description  Floating time study timer with associate management and Google Sheets sync
 // @match        https://ramdos.org/*
 // @match        https://fclm-portal.amazon.com/*
@@ -19,7 +19,7 @@
   // GOOGLE SHEETS API
   // ═══════════════════════════════════════════════════════
   const API_URL = 'https://script.google.com/macros/s/AKfycbxVHsKAFccb80Pl6FhOsuMTcAEwZACFVPlxgwjb56UueO-_F_Q6xe-pYqJsOy4UUxni/exec';
-  const CURRENT_VERSION = '9.9';
+  const CURRENT_VERSION = '10.1';
   const INSTALL_URL = 'https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js';
 
   function checkForUpdate() {
@@ -28,13 +28,11 @@
       const latest = data.latestVersion.toString().trim();
       const current = CURRENT_VERSION.toString().trim();
 
-      // Already on latest — clear any dismissed flag so future updates show fresh
       if (latest === current) {
         localStorage.removeItem('sna4_dismissed_version');
         return;
       }
 
-      // User already dismissed THIS version's banner — don't show again
       const dismissed = localStorage.getItem('sna4_dismissed_version');
       if (dismissed === latest) return;
 
@@ -132,7 +130,6 @@
       { name: "Scan / add SPOO", target: t8 },
       { name: "Push item onto conveyor", target: t9 }
     ];
-    // Filter out tasks with 0 target — they are not applicable
     const tasks = allTasks.filter(t => t.target > 0);
     const totalTarget = tasks.reduce((a, t) => a + t.target, 0);
     return { tasks, totalTarget };
@@ -151,7 +148,12 @@
   }
 
   function buildDockTasks() {
-    return { tasks: [], totalTarget: 0, comingSoon: true };
+    const tasks = [
+      { name: "Scan item on conveyor", target: 6 },
+      { name: "Finding the accurate Gocart", target: 12 },
+      { name: "Placing item in Gocart", target: 6 }
+    ];
+    return { tasks, totalTarget: 24, dockNote: '⚠ Includes possible waterspider @ 100 UPH' };
   }
 
   const NUM_OBS = 5;
@@ -197,7 +199,7 @@
 
   let state = {
     isOpen: false,
-    view: 'summary', // 'summary' | 'table'
+    view: 'summary',
     selectedProcess: firstProcess,
     selectedSubProcess: firstSub,
     selectedObs: null,
@@ -219,7 +221,6 @@
   // PERSISTENCE — LOCAL + SHEETS
   // ═══════════════════════════════════════════════════════
 
-  // Auditor info is local only — never goes to Sheets
   function saveAuditorLocally() {
     try {
       localStorage.setItem('sna4_auditor', JSON.stringify({
@@ -240,7 +241,6 @@
     } catch (e) { console.warn('Auditor local load failed:', e); }
   }
 
-  // Always save locally first (instant), then push to Sheets
   function saveData() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
@@ -249,15 +249,12 @@
   }
 
   function loadData() {
-    // Load auditor info from local storage first (personal to this machine)
     loadAuditorLocally();
 
-    // Load associate data from local cache
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        // Only load associates from cache, not auditor fields
         if (parsed.associates) appData.associates = parsed.associates;
         if (appData.associates.length > 0) {
           state.currentAssociateIndex = 0;
@@ -265,21 +262,18 @@
       }
     } catch (e) { console.warn('Local load failed:', e); }
 
-    // Then sync latest associates from Sheets
     syncFromSheets();
   }
 
-  // Push full appData to Google Sheets — auditor fields excluded
   function syncToSheets() {
     state.syncStatus = 'syncing';
     updateSyncBadge();
 
-    // Never send auditor name/login to Sheets — strip them out
     const payload = {
       associates: appData.associates
     };
 
-    callAPI({ action: 'saveAll', data: payload })
+    callAPI({ action: 'saveAll', data: payload, _k: 'SNA4_AMAZ0N_2026' })
       .then(() => {
         state.syncStatus = 'synced';
         state.lastSynced = new Date().toLocaleTimeString();
@@ -292,7 +286,6 @@
       });
   }
 
-  // Pull latest data from Google Sheets — only updates associates, never auditor fields
   function syncFromSheets() {
     state.syncStatus = 'syncing';
     updateSyncBadge();
@@ -372,13 +365,11 @@
   }
 
   function addAssociate(name, login) {
-    // Check for duplicate login
     const duplicate = appData.associates.find(a => a.login.toLowerCase() === login.trim().toLowerCase());
     if (duplicate) {
       showToast(`⚠ Login "${login.trim()}" already exists as ${duplicate.name}`);
       return false;
     }
-    // Warn if name matches auditor name
     if (name.trim().toLowerCase() === appData.auditorName.toLowerCase() && appData.auditorName) {
       showToast(`⚠ Warning: Associate name matches auditor name!`);
     }
@@ -480,7 +471,6 @@
     }
     .takt-header-btn:hover { background: rgba(255,255,255,0.3); }
 
-    /* ── SYNC BAR ── */
     .takt-sync-bar {
       display: flex; align-items: center; justify-content: space-between;
       padding: 5px 24px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; flex-shrink: 0;
@@ -496,7 +486,6 @@
     }
     .takt-sync-refresh:hover { background: #eef2ff; border-color: #6366f1; }
 
-    /* ── AUDITOR BAR ── */
     .takt-auditor-bar {
       display: flex; align-items: center; gap: 16px; padding: 8px 24px;
       background: #fefce8; border-bottom: 2px solid #fde68a; flex-shrink: 0; flex-wrap: wrap;
@@ -514,7 +503,6 @@
     .takt-auditor-input:focus { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,0.15); }
     .takt-auditor-input::placeholder { color: #d4a574; }
 
-    /* ── ASSOCIATE BAR ── */
     .takt-associate-bar {
       display: flex; align-items: center; gap: 10px; padding: 10px 24px;
       background: linear-gradient(135deg, #ecfdf5, #f0fdf4); border-bottom: 2px solid #86efac;
@@ -572,7 +560,6 @@
     }
     .takt-assoc-action-btn.primary:hover { box-shadow: 0 4px 15px rgba(34,197,94,0.4); }
 
-    /* ── SEARCH DROPDOWN ── */
     .takt-search-overlay {
       position: absolute; top: 100%; left: 24px; right: 24px;
       background: white; border-radius: 14px; border: 2px solid #e2e8f0;
@@ -616,7 +603,6 @@
     }
     .takt-search-add-new:hover { background: #eef2ff; }
 
-    /* ── ADD FORM OVERLAY ── */
     .takt-add-overlay {
       position: absolute; top: 0; left: 0; right: 0; bottom: 0;
       background: rgba(255,255,255,0.9); backdrop-filter: blur(8px);
@@ -660,7 +646,6 @@
     .takt-add-submit:hover { box-shadow: 0 4px 15px rgba(34,197,94,0.4); }
     .takt-add-submit:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
 
-    /* ── PROCESS BAR ── */
     .takt-process-bar {
       display: flex; align-items: center; gap: 16px; padding: 10px 24px;
       background: #eef2ff; border-bottom: 2px solid #c7d2fe; flex-shrink: 0; flex-wrap: wrap;
@@ -692,8 +677,13 @@
       color: #6366f1; font-size: 10px; font-weight: 700; border: 1px solid #c7d2fe; white-space: nowrap;
     }
     .takt-target-chip.no-target { background: rgba(245,158,11,0.1); color: #d97706; border-color: #fde68a; }
+    .takt-dock-note {
+      padding: 4px 12px; border-radius: 6px;
+      background: rgba(245,158,11,0.12); color: #b45309;
+      font-size: 11px; font-weight: 700; border: 1px solid #fde68a;
+      white-space: nowrap; margin-left: auto;
+    }
 
-    /* ── CONTROL BAR ── */
     .takt-control-bar {
       display: flex; align-items: center; gap: 10px; padding: 10px 24px;
       background: #f8fafc; border-bottom: 1px solid #e2e8f0; flex-shrink: 0;
@@ -727,7 +717,6 @@
     .takt-btn-action.clear-btn { background: white; color: #64748b; border: 2px solid #e2e8f0; }
     .takt-btn-action.clear-btn:hover { border-color: #f59e0b; color: #f59e0b; background: #fffbeb; }
 
-    /* ── TIMER BAR ── */
     .takt-timer-bar {
       display: flex; align-items: center; justify-content: center; padding: 10px 24px;
       gap: 16px; background: white; border-bottom: 1px solid #e2e8f0; flex-shrink: 0;
@@ -741,7 +730,6 @@
     .takt-rec-dot { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; animation: rec-dot-blink 1s infinite; }
     @keyframes rec-dot-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.2; } }
 
-    /* ── TABLE ── */
     .takt-table-wrap { flex: 1; overflow-y: auto; min-height: 0; }
     .takt-table-wrap::-webkit-scrollbar { width: 6px; }
     .takt-table-wrap::-webkit-scrollbar-track { background: #f8fafc; }
@@ -779,7 +767,6 @@
     .takt-table tbody tr.row-total td.obs-cell.over { color: #dc2626; background: #fee2e2; }
     .takt-table tbody tr.row-total td.obs-cell.no-target-recorded { color: #1e293b; background: #fef9c3; }
 
-    /* ── COACHING NOTES ── */
     .takt-coaching-section { padding: 10px 24px; background: #fffbeb; border-top: 2px solid #fde68a; flex-shrink: 0; }
     .takt-coaching-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
     .takt-coaching-title { font-size: 12px; font-weight: 800; color: #a16207; text-transform: uppercase; letter-spacing: 0.8px; display: flex; align-items: center; gap: 6px; }
@@ -791,14 +778,12 @@
     .takt-coaching-textarea:focus { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,0.15); }
     .takt-coaching-textarea::placeholder { color: #d4a574; }
 
-    /* ── PROGRESS ── */
     .takt-progress-section { padding: 8px 24px; background: #f8fafc; border-top: 1px solid #e2e8f0; display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
     .takt-progress-section.hidden { display: none; }
     .takt-progress-bar-bg { flex: 1; height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden; }
     .takt-progress-bar-fill { height: 100%; background: linear-gradient(90deg, #6366f1, #8b5cf6); border-radius: 3px; transition: width 0.5s cubic-bezier(0.4,0,0.2,1); }
     .takt-progress-text { font-size: 11px; font-weight: 700; color: #6366f1; white-space: nowrap; }
 
-    /* ── FOOTER ── */
     .takt-footer { padding: 10px 24px; border-top: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between; background: #fafbfc; flex-shrink: 0; }
     .takt-footer-left { display: flex; gap: 6px; }
     .takt-footer-btn { padding: 6px 14px; border-radius: 7px; border: 1.5px solid #e2e8f0; background: white; color: #64748b; font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 5px; font-family: 'Inter', sans-serif; }
@@ -806,7 +791,6 @@
     .takt-footer-btn.danger:hover { border-color: #ef4444; color: #ef4444; background: #fef2f2; }
     .takt-footer-status { font-size: 11px; color: #94a3b8; font-weight: 500; }
 
-    /* ── CONFIRM ── */
     .takt-confirm-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.85); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 10; border-radius: 20px; }
     .takt-confirm-box { background: white; border-radius: 18px; padding: 28px; width: 320px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; }
     .takt-confirm-icon { width: 52px; height: 52px; border-radius: 50%; background: #fef2f2; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; font-size: 22px; }
@@ -829,7 +813,6 @@
     .takt-empty-state-btn { margin-top: 8px; padding: 12px 28px; border-radius: 12px; border: none; background: linear-gradient(135deg, #22c55e, #16a34a); color: white; font-size: 14px; font-weight: 700; cursor: pointer; transition: all 0.2s; font-family: 'Inter', sans-serif; display: flex; align-items: center; gap: 8px; }
     .takt-empty-state-btn:hover { box-shadow: 0 8px 25px rgba(34,197,94,0.4); transform: translateY(-2px); }
 
-    /* ── SUMMARY VIEW ── */
     .takt-summary-wrap { flex: 1; overflow-y: auto; padding: 16px 24px; min-height: 0; }
     .takt-summary-wrap::-webkit-scrollbar { width: 6px; }
     .takt-summary-wrap::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
@@ -942,9 +925,6 @@
   document.body.appendChild(panel);
 
   // ═══════════════════════════════════════════════════════
-  // RENDER — MAIN
-  // ═══════════════════════════════════════════════════════
-  // ═══════════════════════════════════════════════════════
   // RENDER — SUMMARY VIEW
   // ═══════════════════════════════════════════════════════
   function renderSummary(headerHTML, syncBarHTML, auditorBarHTML, assocBarHTML, footerHTML) {
@@ -955,13 +935,10 @@
       const subs = PROCESS_PATHS[process];
       const subKeys = Object.keys(subs);
       const isDefault = subKeys.length === 1 && subKeys[0] === '_default';
-      const isDock = subs[subKeys[0]].comingSoon;
 
-      // Calculate total progress across all sub-processes
       let totalCompleted = 0;
       let totalPossible = 0;
       subKeys.forEach(sub => {
-        if (isDock) return;
         const key = `${process}__${sub}`;
         const obsStore = assoc.observationStore[key];
         totalPossible += NUM_OBS;
@@ -973,68 +950,61 @@
       });
 
       const parentPct = totalPossible > 0 ? (totalCompleted / totalPossible) * 100 : 0;
-      const parentDone = !isDock && totalCompleted === totalPossible && totalPossible > 0;
+      const parentDone = totalCompleted === totalPossible && totalPossible > 0;
       const parentEmpty = totalCompleted === 0;
-      const parentFillClass = isDock ? 'empty' : parentDone ? 'complete' : parentEmpty ? 'empty' : 'partial';
-      const parentStatusClass = isDock ? 'soon' : parentDone ? 'complete' : parentEmpty ? 'empty' : 'partial';
-      const parentStatus = isDock ? '🚧 Soon' : parentDone ? '✅ Done' : `${totalCompleted}/${totalPossible}`;
+      const parentFillClass = parentDone ? 'complete' : parentEmpty ? 'empty' : 'partial';
+      const parentStatusClass = parentDone ? 'complete' : parentEmpty ? 'empty' : 'partial';
+      const parentStatus = parentDone ? '✅ Done' : `${totalCompleted}/${totalPossible}`;
 
-      // Parent process row
       rowsHTML += `
         <tr class="takt-summary-parent-row">
           <td class="takt-summary-parent-name">${process}</td>
           <td>
-            ${isDock ? '' : `
             <div class="takt-summary-progress-wrap">
               <div class="takt-summary-bar-bg">
                 <div class="takt-summary-bar-fill ${parentFillClass}" style="width:${parentPct}%"></div>
               </div>
               <div class="takt-summary-status ${parentStatusClass}">${parentStatus}</div>
-            </div>`}
-            ${isDock ? `<div class="takt-summary-status soon">🚧 Coming Soon</div>` : ''}
+            </div>
           </td>
         </tr>`;
 
-      // Sub-process rows (skip if default/no subs)
-      if (!isDock) {
-        subKeys.forEach(sub => {
-          const key = `${process}__${sub}`;
-          const obsStore = assoc.observationStore[key];
-          let completed = 0;
-          if (obsStore) {
-            for (let i = 1; i <= NUM_OBS; i++) {
-              if (obsStore[i] && obsStore[i].total !== null) completed++;
-            }
+      subKeys.forEach(sub => {
+        const key = `${process}__${sub}`;
+        const obsStore = assoc.observationStore[key];
+        let completed = 0;
+        if (obsStore) {
+          for (let i = 1; i <= NUM_OBS; i++) {
+            if (obsStore[i] && obsStore[i].total !== null) completed++;
           }
+        }
 
-          const pct = (completed / NUM_OBS) * 100;
-          const isDone = completed === NUM_OBS;
-          const isEmpty = completed === 0;
-          const fillClass = isDone ? 'complete' : isEmpty ? 'empty' : 'partial';
-          const statusClass = isDone ? 'complete' : isEmpty ? 'empty' : 'partial';
-          const statusText = isDone ? '✅' : isEmpty ? '0/5' : `${completed}/5 🔄`;
-          const subLabel = isDefault ? process : sub;
+        const pct = (completed / NUM_OBS) * 100;
+        const isDone = completed === NUM_OBS;
+        const isEmpty = completed === 0;
+        const fillClass = isDone ? 'complete' : isEmpty ? 'empty' : 'partial';
+        const statusClass = isDone ? 'complete' : isEmpty ? 'empty' : 'partial';
+        const statusText = isDone ? '✅' : isEmpty ? '0/5' : `${completed}/5 🔄`;
+        const subLabel = isDefault ? process : sub;
 
-          rowsHTML += `
-            <tr class="takt-summary-row ${isDone ? 'done' : ''}" data-process="${escapeHtml(process)}" data-sub="${escapeHtml(sub)}">
-              <td class="takt-summary-sub-cell">
-                <span class="takt-summary-sub-arrow">›</span>
-                <span class="takt-summary-sub-label">${escapeHtml(subLabel)}</span>
-              </td>
-              <td>
-                <div class="takt-summary-progress-wrap">
-                  <div class="takt-summary-bar-bg">
-                    <div class="takt-summary-bar-fill ${fillClass}" style="width:${pct}%"></div>
-                  </div>
-                  <div class="takt-summary-status ${statusClass}">${statusText}</div>
-                  <span class="takt-summary-go">›</span>
+        rowsHTML += `
+          <tr class="takt-summary-row ${isDone ? 'done' : ''}" data-process="${escapeHtml(process)}" data-sub="${escapeHtml(sub)}">
+            <td class="takt-summary-sub-cell">
+              <span class="takt-summary-sub-arrow">›</span>
+              <span class="takt-summary-sub-label">${escapeHtml(subLabel)}</span>
+            </td>
+            <td>
+              <div class="takt-summary-progress-wrap">
+                <div class="takt-summary-bar-bg">
+                  <div class="takt-summary-bar-fill ${fillClass}" style="width:${pct}%"></div>
                 </div>
-              </td>
-            </tr>`;
-        });
-      }
+                <div class="takt-summary-status ${statusClass}">${statusText}</div>
+                <span class="takt-summary-go">›</span>
+              </div>
+            </td>
+          </tr>`;
+      });
 
-      // Spacer between process groups
       rowsHTML += `<tr class="takt-summary-spacer"><td colspan="2"></td></tr>`;
     });
 
@@ -1048,7 +1018,6 @@
 
     panel.innerHTML = headerHTML + syncBarHTML + auditorBarHTML + assocBarHTML + summaryHTML + footerHTML;
 
-    // Wire sub-process row clicks
     panel.querySelectorAll('.takt-summary-row').forEach(row => {
       row.onclick = () => {
         state.selectedProcess = row.dataset.process;
@@ -1173,7 +1142,6 @@
       return;
     }
 
-    // Build simple footer for summary view
     const summaryFooterHTML = `
       <div class="takt-footer">
         <div class="takt-footer-left">
@@ -1184,11 +1152,15 @@
         <div class="takt-footer-status">Associate ${state.currentAssociateIndex + 1} of ${appData.associates.length}</div>
       </div>`;
 
-    // Show summary view if not in table mode
     if (state.view !== 'table') {
       renderSummary(headerHTML, syncBarHTML, auditorBarHTML, assocBarHTML, summaryFooterHTML);
       return;
     }
+
+    // ── PROCESS BAR — with dock note inline if applicable ──
+    const dockNote = config.dockNote
+      ? `<span class="takt-dock-note">${escapeHtml(config.dockNote)}</span>`
+      : '';
 
     const processBarHTML = `
       <div class="takt-process-bar">
@@ -1196,6 +1168,7 @@
         <span class="takt-process-arrow">›</span>
         <span style="font-size:13px;font-weight:800;color:#1e293b;">${state.selectedProcess}</span>
         ${hasSubPaths(state.selectedProcess) ? `<span class="takt-process-arrow">›</span><span style="font-size:13px;font-weight:700;color:#6366f1;">${state.selectedSubProcess}</span>` : ''}
+        ${dockNote}
       </div>`;
 
     let pillsHTML = '';
@@ -1329,21 +1302,6 @@
         </div>
         <div class="takt-footer-status">${statusText} · Associate ${state.currentAssociateIndex + 1} of ${appData.associates.length}</div>
       </div>`;
-
-    // Dock coming soon state — checked AFTER all HTML is built
-    if (config.comingSoon) {
-      const comingSoonHTML = `
-        <div class="takt-empty-state">
-          <div class="takt-empty-state-icon">🚧</div>
-          <div class="takt-empty-state-title">Dock Tasks Coming Soon</div>
-          <div class="takt-empty-state-msg">Target times for the Dock process are yet to be determined. Check back soon!</div>
-        </div>`;
-      panel.innerHTML = headerHTML + syncBarHTML + auditorBarHTML + assocBarHTML + processBarHTML + comingSoonHTML + footerHTML;
-      wireBaseEvents();
-      wireAssociateEvents();
-      updateSyncBadge();
-      return;
-    }
 
     panel.innerHTML = headerHTML + syncBarHTML + auditorBarHTML + assocBarHTML + processBarHTML + controlBarHTML + timerBarHTML + tableHTML + coachingHTML + progressHTML + footerHTML;
 
@@ -1541,14 +1499,9 @@
     function validateForm() {
       const nameVal = nameInput.value.trim();
       const loginVal = loginInput.value.trim();
-
-      // Name matches auditor warning
       nameWarn.style.display = (nameVal && appData.auditorName && nameVal.toLowerCase() === appData.auditorName.toLowerCase()) ? 'block' : 'none';
-
-      // Duplicate login warning
       const dupLogin = appData.associates.find(a => a.login.toLowerCase() === loginVal.toLowerCase());
       loginWarn.style.display = (loginVal && dupLogin) ? 'block' : 'none';
-
       submitBtn.disabled = !(nameVal.length > 0 && loginVal.length > 0 && !dupLogin);
     }
 
@@ -1652,7 +1605,6 @@
         obs.endTime = formatTime(new Date());
         obs.total = obs.tasks.reduce((a, b) => a + b, 0);
 
-        // Stamp who last observed this associate
         const currentAssoc = getCurrentAssociate();
         if (currentAssoc && appData.auditorLogin) {
           currentAssoc.lastObservedBy = appData.auditorLogin;
@@ -1757,6 +1709,7 @@
     csv += `Associate Name,${assoc.name}\nAssociate Login,${assoc.login}\n`;
     csv += `Process Path,${state.selectedProcess}\n`;
     if (displaySub) csv += `Sub-Process,${displaySub}\n`;
+    if (config.dockNote) csv += `Note,${config.dockNote}\n`;
     csv += `Total Target,${showTargets ? TOTAL_TARGET+'s' : 'N/A'}\nDate,${new Date().toLocaleDateString()}\n\n`;
     csv += 'Task,Target';
     for (let i = 1; i <= NUM_OBS; i++) csv += `,Observation ${i}`;
@@ -1798,6 +1751,7 @@
 
     let text = `TAKT TIME STUDY — SNA4\nAuditor: ${appData.auditorName} (${appData.auditorLogin})\nAssociate: ${assoc.name} (${assoc.login})\nProcess: ${state.selectedProcess}`;
     if (displaySub) text += ` › ${displaySub}`;
+    if (config.dockNote) text += `\nNote: ${config.dockNote}`;
     text += `\nDate: ${new Date().toLocaleString()}\nTarget Total: ${showTargets ? TOTAL_TARGET+'s' : 'N/A'}\n\n`;
 
     for (let i = 1; i <= NUM_OBS; i++) {
@@ -1880,8 +1834,7 @@
   updateBadge();
   checkForUpdate();
 
-  // Auto-sync every 60 seconds when panel is open
   setInterval(() => { if (state.isOpen && !state.isRunning) syncFromSheets(); }, 60000);
 
-  console.log('✅ SNA4 Takt Time Study Timer v9.0 loaded with Google Sheets sync! Alt+T to open.');
+  console.log('✅ SNA4 Takt Time Study Timer v10.1 loaded with Google Sheets sync! Alt+T to open.');
 })();
