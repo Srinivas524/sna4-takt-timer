@@ -1,13 +1,12 @@
 // ==UserScript==
 // @name         SNA4 Takt Time Study Timer
 // @namespace    http://tampermonkey.net/
-// @version      10.1
-// @description  Floating time study timer with associate management and Google Sheets sync
+// @version      10.2
+// @description  Floating time study timer with associate management and SharePoint sync
 // @match        https://ramdos.org/*
 // @match        https://fclm-portal.amazon.com/*
 // @grant        GM_xmlhttpRequest
-// @connect      script.google.com
-// @connect      script.googleusercontent.com
+// @connect      amazon.sharepoint.com
 // @updateURL    https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js
 // @downloadURL  https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js
 // ==/UserScript==
@@ -16,26 +15,114 @@
   'use strict';
 
   // ═══════════════════════════════════════════════════════
-  // GOOGLE SHEETS API
+  // SHAREPOINT API
   // ═══════════════════════════════════════════════════════
-  const API_URL = 'https://script.google.com/macros/s/AKfycbxVHsKAFccb80Pl6FhOsuMTcAEwZACFVPlxgwjb56UueO-_F_Q6xe-pYqJsOy4UUxni/exec';
-  const CURRENT_VERSION = '10.1';
+  const SP_SITE    = 'https://amazon.sharepoint.com/sites/TackAnalysis';
+  const SP_LIST_ID = '6d9d4699-61ad-417b-aada-47f937d71754';
+  const SP_API     = `${SP_SITE}/_api/web/lists(guid'${SP_LIST_ID}')`;
+
+  const CURRENT_VERSION = '10.2';
   const INSTALL_URL = 'https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js';
 
-  function checkForUpdate() {
-    fetchAPI('getVersion').then((data) => {
-      if (!data || !data.latestVersion) return;
-      const latest = data.latestVersion.toString().trim();
-      const current = CURRENT_VERSION.toString().trim();
+  // Fetch SharePoint request digest (required for all writes)
+  function getDigest() {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: `${SP_SITE}/_api/contextinfo`,
+        headers: {
+          'Accept': 'application/json;odata=verbose',
+          'Content-Type': 'application/json;odata=verbose'
+        },
+        onload: (res) => {
+          try {
+            const data = JSON.parse(res.responseText);
+            resolve(data.d.GetContextWebInformation.FormDigestValue);
+          } catch (e) { reject(e); }
+        },
+        onerror: (err) => reject(err)
+      });
+    });
+  }
 
+  // GET all items from the list
+  function spGet() {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: `${SP_API}/items?$select=Id,Title,DataValue`,
+        headers: { 'Accept': 'application/json;odata=verbose' },
+        onload: (res) => {
+          try {
+            const data = JSON.parse(res.responseText);
+            resolve(data.d.results);
+          } catch (e) { reject(e); }
+        },
+        onerror: (err) => reject(err)
+      });
+    });
+  }
+
+  // POST a new item to the list
+  function spPost(digest, title, value) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: `${SP_API}/items`,
+        headers: {
+          'Accept': 'application/json;odata=verbose',
+          'Content-Type': 'application/json;odata=verbose',
+          'X-RequestDigest': digest
+        },
+        data: JSON.stringify({
+          '__metadata': { 'type': 'SP.Data.TaktTimerDataListItem' },
+          'Title': title,
+          'DataValue': value
+        }),
+        onload: (res) => {
+          try { resolve(JSON.parse(res.responseText)); }
+          catch (e) { reject(e); }
+        },
+        onerror: (err) => reject(err)
+      });
+    });
+  }
+
+  // PATCH (update) an existing item by ID
+  function spPatch(digest, itemId, value) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: `${SP_API}/items(${itemId})`,
+        headers: {
+          'Accept': 'application/json;odata=verbose',
+          'Content-Type': 'application/json;odata=verbose',
+          'X-RequestDigest': digest,
+          'X-HTTP-Method': 'MERGE',
+          'If-Match': '*'
+        },
+        data: JSON.stringify({
+          '__metadata': { 'type': 'SP.Data.TaktTimerDataListItem' },
+          'DataValue': value
+        }),
+        onload: (res) => resolve(res),
+        onerror: (err) => reject(err)
+      });
+    });
+  }
+
+  function checkForUpdate() {
+    spGet().then((items) => {
+      const versionRow = items.find(i => i.Title === 'latestVersion');
+      if (!versionRow || !versionRow.DataValue) return;
+      const latest = versionRow.DataValue.toString().trim();
+      const current = CURRENT_VERSION.toString().trim();
       if (latest === current) {
         localStorage.removeItem('sna4_dismissed_version');
         return;
       }
-
       const dismissed = localStorage.getItem('sna4_dismissed_version');
       if (dismissed === latest) return;
-
       showUpdateBanner(latest);
     }).catch(() => {});
   }
@@ -67,42 +154,6 @@
       }
       window.open(INSTALL_URL, '_blank');
     };
-  }
-
-  function callAPI(payload) {
-    return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
-        method: 'POST',
-        url: API_URL,
-        headers: { 'Content-Type': 'text/plain' },
-        data: JSON.stringify(payload),
-        onload: (res) => {
-          try {
-            resolve(JSON.parse(res.responseText));
-          } catch (e) {
-            reject(e);
-          }
-        },
-        onerror: (err) => reject(err)
-      });
-    });
-  }
-
-  function fetchAPI(action) {
-    return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url: API_URL + '?action=' + action,
-        onload: (res) => {
-          try {
-            resolve(JSON.parse(res.responseText));
-          } catch (e) {
-            reject(e);
-          }
-        },
-        onerror: (err) => reject(err)
-      });
-    });
   }
 
   // ═══════════════════════════════════════════════════════
@@ -269,18 +320,25 @@
     state.syncStatus = 'syncing';
     updateSyncBadge();
 
-    const payload = {
-      associates: appData.associates
-    };
+    const value = JSON.stringify({ associates: appData.associates });
 
-    callAPI({ action: 'saveAll', data: payload, _k: 'SNA4_AMAZ0N_2026' })
+    getDigest()
+      .then(digest => spGet().then(items => ({ digest, items })))
+      .then(({ digest, items }) => {
+        const existing = items.find(i => i.Title === 'appData');
+        if (existing) {
+          return spPatch(digest, existing.Id, value);
+        } else {
+          return spPost(digest, 'appData', value);
+        }
+      })
       .then(() => {
         state.syncStatus = 'synced';
         state.lastSynced = new Date().toLocaleTimeString();
         updateSyncBadge();
       })
       .catch((err) => {
-        console.warn('Sheets sync failed:', err);
+        console.warn('SharePoint sync failed:', err);
         state.syncStatus = 'error';
         updateSyncBadge();
       });
@@ -290,13 +348,17 @@
     state.syncStatus = 'syncing';
     updateSyncBadge();
 
-    fetchAPI('getAll')
-      .then((data) => {
-        if (data && data.associates && data.associates.length > 0) {
-          appData.associates = data.associates;
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
-          if (appData.associates.length > 0 && state.currentAssociateIndex < 0) {
-            state.currentAssociateIndex = 0;
+    spGet()
+      .then((items) => {
+        const appDataRow = items.find(i => i.Title === 'appData');
+        if (appDataRow && appDataRow.DataValue) {
+          const parsed = JSON.parse(appDataRow.DataValue);
+          if (parsed && parsed.associates && parsed.associates.length > 0) {
+            appData.associates = parsed.associates;
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+            if (appData.associates.length > 0 && state.currentAssociateIndex < 0) {
+              state.currentAssociateIndex = 0;
+            }
           }
         }
         state.syncStatus = 'synced';
@@ -305,7 +367,7 @@
         if (state.isOpen) renderPanel();
       })
       .catch((err) => {
-        console.warn('Sheets fetch failed:', err);
+        console.warn('SharePoint fetch failed:', err);
         state.syncStatus = 'error';
         updateSyncBadge();
       });
@@ -1331,7 +1393,7 @@
     if (searchBtn) searchBtn.onclick = () => showSearchOverlay();
     if (addBtn) addBtn.onclick = () => showAddForm();
     if (emptyAddBtn) emptyAddBtn.onclick = () => showAddForm();
-    if (syncNowBtn) syncNowBtn.onclick = () => { showToast('↺ Syncing with Google Sheets...'); syncFromSheets(); };
+    if (syncNowBtn) syncNowBtn.onclick = () => { showToast('↺ Syncing with SharePoint...'); syncFromSheets(); };
 
     const prevBtn = document.getElementById('takt-nav-prev');
     const nextBtn = document.getElementById('takt-nav-next');
@@ -1836,5 +1898,5 @@
 
   setInterval(() => { if (state.isOpen && !state.isRunning) syncFromSheets(); }, 60000);
 
-  console.log('✅ SNA4 Takt Time Study Timer v10.1 loaded with Google Sheets sync! Alt+T to open.');
+  console.log('✅ SNA4 Takt Time Study Timer v10.2 loaded with SharePoint sync! Alt+T to open.');
 })();
