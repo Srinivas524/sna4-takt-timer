@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SNA4 Takt Time Study Timer
 // @namespace    http://tampermonkey.net/
-// @version      9.7
+// @version      9.8
 // @description  Floating time study timer with associate management and Google Sheets sync
 // @match        https://ramdos.org/*
 // @match        https://fclm-portal.amazon.com/*
@@ -19,7 +19,7 @@
   // GOOGLE SHEETS API
   // ═══════════════════════════════════════════════════════
   const API_URL = 'https://script.google.com/macros/s/AKfycbxVHsKAFccb80Pl6FhOsuMTcAEwZACFVPlxgwjb56UueO-_F_Q6xe-pYqJsOy4UUxni/exec';
-  const CURRENT_VERSION = '9.7';
+  const CURRENT_VERSION = '9.8';
   const INSTALL_URL = 'https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js';
 
   function checkForUpdate() {
@@ -197,6 +197,7 @@
 
   let state = {
     isOpen: false,
+    view: 'summary', // 'summary' | 'table'
     selectedProcess: firstProcess,
     selectedSubProcess: firstSub,
     selectedObs: null,
@@ -210,7 +211,7 @@
     showAssociateSearch: false,
     associateSearchQuery: '',
     showAddForm: false,
-    syncStatus: 'idle', // idle | syncing | synced | error
+    syncStatus: 'idle',
     lastSynced: null
   };
 
@@ -404,6 +405,7 @@
     if (len === 0) return;
     state.currentAssociateIndex = (state.currentAssociateIndex + direction + len) % len;
     state.selectedObs = null;
+    state.view = 'summary';
     renderPanel();
   }
 
@@ -827,6 +829,40 @@
     .takt-empty-state-btn { margin-top: 8px; padding: 12px 28px; border-radius: 12px; border: none; background: linear-gradient(135deg, #22c55e, #16a34a); color: white; font-size: 14px; font-weight: 700; cursor: pointer; transition: all 0.2s; font-family: 'Inter', sans-serif; display: flex; align-items: center; gap: 8px; }
     .takt-empty-state-btn:hover { box-shadow: 0 8px 25px rgba(34,197,94,0.4); transform: translateY(-2px); }
 
+    /* ── SUMMARY VIEW ── */
+    .takt-summary-wrap { flex: 1; overflow-y: auto; padding: 16px 24px; min-height: 0; }
+    .takt-summary-wrap::-webkit-scrollbar { width: 6px; }
+    .takt-summary-wrap::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    .takt-summary-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 10px; }
+    .takt-summary-table { width: 100%; border-collapse: collapse; }
+    .takt-summary-table thead th { background: #f1f5f9; color: #475569; font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; padding: 8px 16px; text-align: left; border-bottom: 2px solid #e2e8f0; }
+    .takt-summary-table thead th:last-child { text-align: center; }
+    .takt-summary-row { cursor: pointer; transition: all 0.15s; border-bottom: 1px solid #f1f5f9; }
+    .takt-summary-row:hover { background: #eef2ff; }
+    .takt-summary-row:hover td:first-child { color: #6366f1; }
+    .takt-summary-row.done { background: #f0fdf4; }
+    .takt-summary-row.done:hover { background: #dcfce7; }
+    .takt-summary-row.coming-soon { cursor: default; opacity: 0.5; }
+    .takt-summary-row.coming-soon:hover { background: transparent; }
+    .takt-summary-row td { padding: 12px 16px; font-size: 13px; color: #334155; font-weight: 500; }
+    .takt-summary-process-name { font-weight: 700; color: #1e293b; font-size: 13px; }
+    .takt-summary-sub-name { font-size: 11px; color: #64748b; margin-top: 2px; }
+    .takt-summary-progress-wrap { display: flex; align-items: center; gap: 10px; }
+    .takt-summary-bar-bg { flex: 1; height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden; min-width: 80px; }
+    .takt-summary-bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
+    .takt-summary-bar-fill.complete { background: linear-gradient(90deg, #22c55e, #16a34a); }
+    .takt-summary-bar-fill.partial { background: linear-gradient(90deg, #6366f1, #8b5cf6); }
+    .takt-summary-bar-fill.empty { background: #e2e8f0; width: 0 !important; }
+    .takt-summary-status { font-size: 12px; font-weight: 700; white-space: nowrap; min-width: 60px; text-align: right; }
+    .takt-summary-status.complete { color: #16a34a; }
+    .takt-summary-status.partial { color: #6366f1; }
+    .takt-summary-status.empty { color: #cbd5e1; }
+    .takt-summary-status.soon { color: #f59e0b; }
+    .takt-summary-arrow { color: #cbd5e1; font-size: 16px; text-align: right; }
+    .takt-summary-row:hover .takt-summary-arrow { color: #6366f1; }
+    .takt-back-btn { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 8px; border: 2px solid #c7d2fe; background: white; color: #6366f1; font-size: 12px; font-weight: 700; cursor: pointer; transition: all 0.2s; font-family: 'Inter', sans-serif; }
+    .takt-back-btn:hover { background: #eef2ff; }
+
     .takt-assoc-delete-btn { width: 28px; height: 28px; border-radius: 6px; border: 1.5px solid #fca5a5; background: white; color: #ef4444; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; flex-shrink: 0; }
     .takt-assoc-delete-btn:hover { background: #ef4444; color: white; border-color: #ef4444; }
   `;
@@ -907,6 +943,89 @@
   // ═══════════════════════════════════════════════════════
   // RENDER — MAIN
   // ═══════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════
+  // RENDER — SUMMARY VIEW
+  // ═══════════════════════════════════════════════════════
+  function renderSummary(headerHTML, syncBarHTML, auditorBarHTML, assocBarHTML, footerHTML) {
+    const assoc = getCurrentAssociate();
+
+    let rowsHTML = '';
+    Object.keys(PROCESS_PATHS).forEach(process => {
+      const subs = PROCESS_PATHS[process];
+      const subKeys = Object.keys(subs);
+      const isDefault = subKeys.length === 1 && subKeys[0] === '_default';
+      const isDock = subs[subKeys[0]].comingSoon;
+
+      subKeys.forEach(sub => {
+        const key = `${process}__${sub}`;
+        const obsStore = assoc.observationStore[key];
+        let completed = 0;
+        if (obsStore) {
+          for (let i = 1; i <= NUM_OBS; i++) {
+            if (obsStore[i] && obsStore[i].total !== null) completed++;
+          }
+        }
+
+        const pct = (completed / NUM_OBS) * 100;
+        const isDone = completed === NUM_OBS;
+        const isEmpty = completed === 0;
+        const rowClass = isDock ? 'coming-soon' : isDone ? 'done' : '';
+        const fillClass = isDone ? 'complete' : isEmpty ? 'empty' : 'partial';
+        const statusClass = isDock ? 'soon' : isDone ? 'complete' : isEmpty ? 'empty' : 'partial';
+        const statusText = isDock ? '🚧 Soon' : isDone ? '✅ Done' : isEmpty ? '0/5' : `${completed}/5 🔄`;
+
+        rowsHTML += `
+          <tr class="takt-summary-row ${rowClass}" data-process="${escapeHtml(process)}" data-sub="${escapeHtml(sub)}">
+            <td>
+              <div class="takt-summary-process-name">${process}${!isDefault ? '' : ''}</div>
+              ${!isDefault ? `<div class="takt-summary-sub-name">› ${sub}</div>` : ''}
+            </td>
+            <td>
+              <div class="takt-summary-progress-wrap">
+                <div class="takt-summary-bar-bg">
+                  <div class="takt-summary-bar-fill ${fillClass}" style="width:${pct}%"></div>
+                </div>
+                <div class="takt-summary-status ${statusClass}">${statusText}</div>
+              </div>
+            </td>
+            <td class="takt-summary-arrow">${isDock ? '' : '›'}</td>
+          </tr>`;
+      });
+    });
+
+    const summaryHTML = `
+      <div class="takt-summary-wrap">
+        <div class="takt-summary-title">Select a process to begin or continue timing</div>
+        <table class="takt-summary-table">
+          <thead>
+            <tr>
+              <th>Process / Sub-Process</th>
+              <th>Progress</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>${rowsHTML}</tbody>
+        </table>
+      </div>`;
+
+    panel.innerHTML = headerHTML + syncBarHTML + auditorBarHTML + assocBarHTML + summaryHTML + footerHTML;
+
+    // Wire row clicks
+    panel.querySelectorAll('.takt-summary-row:not(.coming-soon)').forEach(row => {
+      row.onclick = () => {
+        state.selectedProcess = row.dataset.process;
+        state.selectedSubProcess = row.dataset.sub;
+        state.selectedObs = null;
+        state.view = 'table';
+        ensureObservations();
+        renderPanel();
+      };
+    });
+
+    wireBaseEvents();
+    updateSyncBadge();
+  }
+
   function renderPanel() {
     const assoc = getCurrentAssociate();
     const hasAssociate = assoc !== null;
@@ -1016,32 +1135,29 @@
       return;
     }
 
-    let processOptions = '';
-    Object.keys(PROCESS_PATHS).forEach(p => {
-      processOptions += `<option value="${p}" ${p === state.selectedProcess ? 'selected' : ''}>${p}</option>`;
-    });
+    // Build simple footer for summary view
+    const summaryFooterHTML = `
+      <div class="takt-footer">
+        <div class="takt-footer-left">
+          <button class="takt-footer-btn" id="takt-export-csv">📥 Export CSV</button>
+          <button class="takt-footer-btn" id="takt-copy-data">📋 Copy</button>
+          <button class="takt-footer-btn danger" id="takt-clear-all">🗑 Clear All</button>
+        </div>
+        <div class="takt-footer-status">Associate ${state.currentAssociateIndex + 1} of ${appData.associates.length}</div>
+      </div>`;
 
-    let subDropdownHTML = '';
-    if (showSub) {
-      let subOptions = '';
-      Object.keys(PROCESS_PATHS[state.selectedProcess]).forEach(s => {
-        subOptions += `<option value="${s}" ${s === state.selectedSubProcess ? 'selected' : ''}>${s}</option>`;
-      });
-      subDropdownHTML = `
-        <span class="takt-process-arrow">›</span>
-        <div class="takt-process-group">
-          <span class="takt-process-label">Sub-Process</span>
-          <select class="takt-process-select" id="takt-sub-dd" ${state.isRunning ? 'disabled' : ''}>${subOptions}</select>
-        </div>`;
+    // Show summary view if not in table mode
+    if (state.view !== 'table') {
+      renderSummary(headerHTML, syncBarHTML, auditorBarHTML, assocBarHTML, summaryFooterHTML);
+      return;
     }
 
     const processBarHTML = `
       <div class="takt-process-bar">
-        <div class="takt-process-group">
-          <span class="takt-process-label">Process</span>
-          <select class="takt-process-select" id="takt-process-dd" ${state.isRunning ? 'disabled' : ''}>${processOptions}</select>
-        </div>
-        ${subDropdownHTML}
+        <button class="takt-back-btn" id="takt-back-to-summary">‹ Back</button>
+        <span class="takt-process-arrow">›</span>
+        <span style="font-size:13px;font-weight:800;color:#1e293b;">${state.selectedProcess}</span>
+        ${hasSubPaths(state.selectedProcess) ? `<span class="takt-process-arrow">›</span><span style="font-size:13px;font-weight:700;color:#6366f1;">${state.selectedSubProcess}</span>` : ''}
       </div>`;
 
     let pillsHTML = '';
@@ -1240,23 +1356,13 @@
   }
 
   function wireAssociateEvents() {
-    const processDd = document.getElementById('takt-process-dd');
-    const subDd = document.getElementById('takt-sub-dd');
-    if (processDd) {
-      processDd.onchange = (e) => {
-        state.selectedProcess = e.target.value;
-        state.selectedSubProcess = Object.keys(PROCESS_PATHS[state.selectedProcess])[0];
-        state.selectedObs = null;
-        ensureObservations(); saveData(); renderPanel();
-      };
-    }
-    if (subDd) {
-      subDd.onchange = (e) => {
-        state.selectedSubProcess = e.target.value;
-        state.selectedObs = null;
-        ensureObservations(); saveData(); renderPanel();
-      };
-    }
+    const backBtn = document.getElementById('takt-back-to-summary');
+    if (backBtn) backBtn.onclick = () => {
+      if (state.isRunning) return;
+      state.view = 'summary';
+      state.selectedObs = null;
+      renderPanel();
+    };
 
     panel.querySelectorAll('.takt-obs-pill').forEach(btn => {
       btn.onclick = () => {
@@ -1334,6 +1440,7 @@
         el.onclick = () => {
           state.currentAssociateIndex = parseInt(el.dataset.index);
           state.selectedObs = null;
+          state.view = 'summary';
           overlay.remove();
           renderPanel();
           showToast(`👤 Switched to ${appData.associates[parseInt(el.dataset.index)].name}`);
