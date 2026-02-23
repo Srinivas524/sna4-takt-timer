@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SNA4 Takt Time Study Timer
 // @namespace    http://tampermonkey.net/
-// @version      9.6
+// @version      9.7
 // @description  Floating time study timer with associate management and Google Sheets sync
 // @match        https://ramdos.org/*
 // @match        https://fclm-portal.amazon.com/*
@@ -19,7 +19,7 @@
   // GOOGLE SHEETS API
   // ═══════════════════════════════════════════════════════
   const API_URL = 'https://script.google.com/macros/s/AKfycbxVHsKAFccb80Pl6FhOsuMTcAEwZACFVPlxgwjb56UueO-_F_Q6xe-pYqJsOy4UUxni/exec';
-  const CURRENT_VERSION = '9.6';
+  const CURRENT_VERSION = '9.7';
   const INSTALL_URL = 'https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js';
 
   function checkForUpdate() {
@@ -138,17 +138,16 @@
     return { tasks, totalTarget };
   }
 
-  function buildStowTasks(locate, openNet, grab, stow, confirm, changeover, drive) {
+  function buildStowTasks(locate, openNet, grab, stow, confirm, drive) {
     const tasks = [
       { name: "Time to locate bin", target: locate },
       { name: "Open cage netting", target: openNet },
       { name: "Grab item from cage", target: grab },
       { name: "Stow unit into bin", target: stow },
       { name: "Confirm stow on scanner", target: confirm },
-      { name: "Cage change over", target: changeover },
       { name: "Drive time from bin to bin", target: drive }
     ];
-    return { tasks, totalTarget: locate + openNet + grab + stow + confirm + changeover + drive };
+    return { tasks, totalTarget: locate + openNet + grab + stow + confirm + drive };
   }
 
   function buildDockTasks() {
@@ -174,7 +173,7 @@
       "_default": buildDockTasks()
     },
     "Stow": {
-      "_default": buildStowTasks(60, 3, 5, 5, 2, 480, 120)
+      "_default": buildStowTasks(60, 3, 5, 5, 2, 120)
     }
   };
 
