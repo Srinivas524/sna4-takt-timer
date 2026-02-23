@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SNA4 Takt Time Study Timer
 // @namespace    http://tampermonkey.net/
-// @version      9.8
+// @version      9.9
 // @description  Floating time study timer with associate management and Google Sheets sync
 // @match        https://ramdos.org/*
 // @match        https://fclm-portal.amazon.com/*
@@ -19,7 +19,7 @@
   // GOOGLE SHEETS API
   // ═══════════════════════════════════════════════════════
   const API_URL = 'https://script.google.com/macros/s/AKfycbxVHsKAFccb80Pl6FhOsuMTcAEwZACFVPlxgwjb56UueO-_F_Q6xe-pYqJsOy4UUxni/exec';
-  const CURRENT_VERSION = '9.8';
+  const CURRENT_VERSION = '9.9';
   const INSTALL_URL = 'https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js';
 
   function checkForUpdate() {
@@ -835,31 +835,32 @@
     .takt-summary-wrap::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
     .takt-summary-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 10px; }
     .takt-summary-table { width: 100%; border-collapse: collapse; }
-    .takt-summary-table thead th { background: #f1f5f9; color: #475569; font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; padding: 8px 16px; text-align: left; border-bottom: 2px solid #e2e8f0; }
-    .takt-summary-table thead th:last-child { text-align: center; }
-    .takt-summary-row { cursor: pointer; transition: all 0.15s; border-bottom: 1px solid #f1f5f9; }
+    .takt-summary-parent-row td { padding: 10px 16px 4px; font-size: 13px; font-weight: 800; color: #1e293b; border-bottom: 2px solid #e2e8f0; }
+    .takt-summary-parent-name { font-size: 14px; font-weight: 800; color: #0f172a; width: 200px; }
+    .takt-summary-row { cursor: pointer; transition: all 0.15s; border-bottom: 1px solid #f8fafc; }
     .takt-summary-row:hover { background: #eef2ff; }
-    .takt-summary-row:hover td:first-child { color: #6366f1; }
     .takt-summary-row.done { background: #f0fdf4; }
     .takt-summary-row.done:hover { background: #dcfce7; }
-    .takt-summary-row.coming-soon { cursor: default; opacity: 0.5; }
-    .takt-summary-row.coming-soon:hover { background: transparent; }
-    .takt-summary-row td { padding: 12px 16px; font-size: 13px; color: #334155; font-weight: 500; }
-    .takt-summary-process-name { font-weight: 700; color: #1e293b; font-size: 13px; }
-    .takt-summary-sub-name { font-size: 11px; color: #64748b; margin-top: 2px; }
+    .takt-summary-row td { padding: 9px 16px; }
+    .takt-summary-sub-cell { display: flex; align-items: center; gap: 8px; width: 200px; }
+    .takt-summary-sub-arrow { color: #cbd5e1; font-size: 14px; font-weight: 700; }
+    .takt-summary-sub-label { font-size: 13px; font-weight: 600; color: #475569; }
+    .takt-summary-row:hover .takt-summary-sub-label { color: #6366f1; }
+    .takt-summary-row:hover .takt-summary-sub-arrow { color: #6366f1; }
     .takt-summary-progress-wrap { display: flex; align-items: center; gap: 10px; }
-    .takt-summary-bar-bg { flex: 1; height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden; min-width: 80px; }
+    .takt-summary-bar-bg { flex: 1; height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden; }
     .takt-summary-bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
     .takt-summary-bar-fill.complete { background: linear-gradient(90deg, #22c55e, #16a34a); }
     .takt-summary-bar-fill.partial { background: linear-gradient(90deg, #6366f1, #8b5cf6); }
-    .takt-summary-bar-fill.empty { background: #e2e8f0; width: 0 !important; }
-    .takt-summary-status { font-size: 12px; font-weight: 700; white-space: nowrap; min-width: 60px; text-align: right; }
+    .takt-summary-bar-fill.empty { width: 0 !important; }
+    .takt-summary-status { font-size: 12px; font-weight: 700; white-space: nowrap; min-width: 50px; text-align: right; }
     .takt-summary-status.complete { color: #16a34a; }
     .takt-summary-status.partial { color: #6366f1; }
     .takt-summary-status.empty { color: #cbd5e1; }
     .takt-summary-status.soon { color: #f59e0b; }
-    .takt-summary-arrow { color: #cbd5e1; font-size: 16px; text-align: right; }
-    .takt-summary-row:hover .takt-summary-arrow { color: #6366f1; }
+    .takt-summary-go { color: #cbd5e1; font-size: 14px; font-weight: 700; margin-left: 4px; }
+    .takt-summary-row:hover .takt-summary-go { color: #6366f1; }
+    .takt-summary-spacer td { padding: 6px; }
     .takt-back-btn { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 8px; border: 2px solid #c7d2fe; background: white; color: #6366f1; font-size: 12px; font-weight: 700; cursor: pointer; transition: all 0.2s; font-family: 'Inter', sans-serif; }
     .takt-back-btn:hover { background: #eef2ff; }
 
@@ -956,62 +957,99 @@
       const isDefault = subKeys.length === 1 && subKeys[0] === '_default';
       const isDock = subs[subKeys[0]].comingSoon;
 
+      // Calculate total progress across all sub-processes
+      let totalCompleted = 0;
+      let totalPossible = 0;
       subKeys.forEach(sub => {
+        if (isDock) return;
         const key = `${process}__${sub}`;
         const obsStore = assoc.observationStore[key];
-        let completed = 0;
+        totalPossible += NUM_OBS;
         if (obsStore) {
           for (let i = 1; i <= NUM_OBS; i++) {
-            if (obsStore[i] && obsStore[i].total !== null) completed++;
+            if (obsStore[i] && obsStore[i].total !== null) totalCompleted++;
           }
         }
-
-        const pct = (completed / NUM_OBS) * 100;
-        const isDone = completed === NUM_OBS;
-        const isEmpty = completed === 0;
-        const rowClass = isDock ? 'coming-soon' : isDone ? 'done' : '';
-        const fillClass = isDone ? 'complete' : isEmpty ? 'empty' : 'partial';
-        const statusClass = isDock ? 'soon' : isDone ? 'complete' : isEmpty ? 'empty' : 'partial';
-        const statusText = isDock ? '🚧 Soon' : isDone ? '✅ Done' : isEmpty ? '0/5' : `${completed}/5 🔄`;
-
-        rowsHTML += `
-          <tr class="takt-summary-row ${rowClass}" data-process="${escapeHtml(process)}" data-sub="${escapeHtml(sub)}">
-            <td>
-              <div class="takt-summary-process-name">${process}${!isDefault ? '' : ''}</div>
-              ${!isDefault ? `<div class="takt-summary-sub-name">› ${sub}</div>` : ''}
-            </td>
-            <td>
-              <div class="takt-summary-progress-wrap">
-                <div class="takt-summary-bar-bg">
-                  <div class="takt-summary-bar-fill ${fillClass}" style="width:${pct}%"></div>
-                </div>
-                <div class="takt-summary-status ${statusClass}">${statusText}</div>
-              </div>
-            </td>
-            <td class="takt-summary-arrow">${isDock ? '' : '›'}</td>
-          </tr>`;
       });
+
+      const parentPct = totalPossible > 0 ? (totalCompleted / totalPossible) * 100 : 0;
+      const parentDone = !isDock && totalCompleted === totalPossible && totalPossible > 0;
+      const parentEmpty = totalCompleted === 0;
+      const parentFillClass = isDock ? 'empty' : parentDone ? 'complete' : parentEmpty ? 'empty' : 'partial';
+      const parentStatusClass = isDock ? 'soon' : parentDone ? 'complete' : parentEmpty ? 'empty' : 'partial';
+      const parentStatus = isDock ? '🚧 Soon' : parentDone ? '✅ Done' : `${totalCompleted}/${totalPossible}`;
+
+      // Parent process row
+      rowsHTML += `
+        <tr class="takt-summary-parent-row">
+          <td class="takt-summary-parent-name">${process}</td>
+          <td>
+            ${isDock ? '' : `
+            <div class="takt-summary-progress-wrap">
+              <div class="takt-summary-bar-bg">
+                <div class="takt-summary-bar-fill ${parentFillClass}" style="width:${parentPct}%"></div>
+              </div>
+              <div class="takt-summary-status ${parentStatusClass}">${parentStatus}</div>
+            </div>`}
+            ${isDock ? `<div class="takt-summary-status soon">🚧 Coming Soon</div>` : ''}
+          </td>
+        </tr>`;
+
+      // Sub-process rows (skip if default/no subs)
+      if (!isDock) {
+        subKeys.forEach(sub => {
+          const key = `${process}__${sub}`;
+          const obsStore = assoc.observationStore[key];
+          let completed = 0;
+          if (obsStore) {
+            for (let i = 1; i <= NUM_OBS; i++) {
+              if (obsStore[i] && obsStore[i].total !== null) completed++;
+            }
+          }
+
+          const pct = (completed / NUM_OBS) * 100;
+          const isDone = completed === NUM_OBS;
+          const isEmpty = completed === 0;
+          const fillClass = isDone ? 'complete' : isEmpty ? 'empty' : 'partial';
+          const statusClass = isDone ? 'complete' : isEmpty ? 'empty' : 'partial';
+          const statusText = isDone ? '✅' : isEmpty ? '0/5' : `${completed}/5 🔄`;
+          const subLabel = isDefault ? process : sub;
+
+          rowsHTML += `
+            <tr class="takt-summary-row ${isDone ? 'done' : ''}" data-process="${escapeHtml(process)}" data-sub="${escapeHtml(sub)}">
+              <td class="takt-summary-sub-cell">
+                <span class="takt-summary-sub-arrow">›</span>
+                <span class="takt-summary-sub-label">${escapeHtml(subLabel)}</span>
+              </td>
+              <td>
+                <div class="takt-summary-progress-wrap">
+                  <div class="takt-summary-bar-bg">
+                    <div class="takt-summary-bar-fill ${fillClass}" style="width:${pct}%"></div>
+                  </div>
+                  <div class="takt-summary-status ${statusClass}">${statusText}</div>
+                  <span class="takt-summary-go">›</span>
+                </div>
+              </td>
+            </tr>`;
+        });
+      }
+
+      // Spacer between process groups
+      rowsHTML += `<tr class="takt-summary-spacer"><td colspan="2"></td></tr>`;
     });
 
     const summaryHTML = `
       <div class="takt-summary-wrap">
-        <div class="takt-summary-title">Select a process to begin or continue timing</div>
+        <div class="takt-summary-title">Tap a process to begin or continue timing</div>
         <table class="takt-summary-table">
-          <thead>
-            <tr>
-              <th>Process / Sub-Process</th>
-              <th>Progress</th>
-              <th></th>
-            </tr>
-          </thead>
           <tbody>${rowsHTML}</tbody>
         </table>
       </div>`;
 
     panel.innerHTML = headerHTML + syncBarHTML + auditorBarHTML + assocBarHTML + summaryHTML + footerHTML;
 
-    // Wire row clicks
-    panel.querySelectorAll('.takt-summary-row:not(.coming-soon)').forEach(row => {
+    // Wire sub-process row clicks
+    panel.querySelectorAll('.takt-summary-row').forEach(row => {
       row.onclick = () => {
         state.selectedProcess = row.dataset.process;
         state.selectedSubProcess = row.dataset.sub;
