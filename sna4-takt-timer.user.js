@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         SNA4 Takt Time Study Timer
 // @namespace    http://tampermonkey.net/
-// @version      11.1
+// @version      11.2
 // @description  Floating time study timer with SharePoint database
 // @match        https://ramdos.org/*
 // @match        https://fclm-portal.amazon.com/*
 // @grant        GM_xmlhttpRequest
 // @connect      amazon.sharepoint.com
+// @connect      raw.githubusercontent.com
 // @updateURL    https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js
 // @downloadURL  https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js
 // ==/UserScript==
@@ -22,7 +23,78 @@
     processAvgs: { guid: '5768158e-ac61-49fe-823f-3306a3767d67', type: null }
   };
   var SP_READY = false;
-  var CURRENT_VERSION = '11.1';
+  var CURRENT_VERSION = '11.2';
+
+  // ── VERSION CHECK ─────────────────────────────────────
+  var GITHUB_RAW_URL = 'https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js';
+
+  function parseVersionFromScript(text) {
+    var match = text.match(/@version\s+([\d.]+)/);
+    return match ? match[1] : null;
+  }
+
+  function versionIsNewer(remote, local) {
+    var r = remote.split('.').map(Number);
+    var l = local.split('.').map(Number);
+    var len = Math.max(r.length, l.length);
+    for (var i = 0; i < len; i++) {
+      var rv = r[i] || 0, lv = l[i] || 0;
+      if (rv > lv) return true;
+      if (rv < lv) return false;
+    }
+    return false;
+  }
+
+  function checkForUpdate() {
+    GM_xmlhttpRequest({
+      method: 'GET',
+      url: GITHUB_RAW_URL + '?_=' + Date.now(),
+      headers: { 'Cache-Control': 'no-cache' },
+      onload: function (res) {
+        if (res.status !== 200) return;
+        var remoteVersion = parseVersionFromScript(res.responseText);
+        if (remoteVersion && versionIsNewer(remoteVersion, CURRENT_VERSION)) {
+          showUpdateModal(remoteVersion);
+        }
+      },
+      onerror: function () {}
+    });
+  }
+
+  function showUpdateModal(remoteVersion) {
+    if (document.getElementById('takt-update-modal')) return;
+    var overlay = document.createElement('div');
+    overlay.id = 'takt-update-modal';
+    overlay.className = 'takt-update-overlay';
+    overlay.innerHTML =
+      '<div class="takt-update-box">' +
+        '<div class="takt-update-icon">🚀</div>' +
+        '<div class="takt-update-title">Update Available</div>' +
+        '<div class="takt-update-versions">' +
+          '<span class="takt-update-ver-old">v' + CURRENT_VERSION + '</span>' +
+          '<span class="takt-update-ver-arrow">→</span>' +
+          '<span class="takt-update-ver-new">v' + remoteVersion + '</span>' +
+        '</div>' +
+        '<div class="takt-update-msg">A new version of the Takt Time Study Timer is available on GitHub. Click <strong>Update Now</strong> to install it — Tampermonkey will confirm before making any changes.</div>' +
+        '<div class="takt-update-steps">' +
+          '<div class="takt-update-step"><span class="takt-update-step-num">1</span>Click Update Now below</div>' +
+          '<div class="takt-update-step"><span class="takt-update-step-num">2</span>Tampermonkey opens — click "Update"</div>' +
+          '<div class="takt-update-step"><span class="takt-update-step-num">3</span>Done — reload this page</div>' +
+        '</div>' +
+        '<div class="takt-update-btns">' +
+          '<button class="takt-update-skip" id="takt-update-skip">Skip for now</button>' +
+          '<button class="takt-update-go" id="takt-update-go">🚀 Update Now</button>' +
+        '</div>' +
+      '</div>';
+    panel.appendChild(overlay);
+    document.getElementById('takt-update-go').onclick = function () {
+      window.open(GITHUB_RAW_URL, '_blank');
+      overlay.remove();
+    };
+    document.getElementById('takt-update-skip').onclick = function () {
+      overlay.remove();
+    };
+  }
 
   // ── AUTO-SYNC ──────────────────────────────────────────
   var autoSyncInterval = null;
@@ -938,6 +1010,44 @@
     .takt-add-submit { background: linear-gradient(135deg, #22c55e, #16a34a); color: white; }
     .takt-add-submit:hover { box-shadow: 0 4px 15px rgba(34,197,94,0.4); }
     .takt-add-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ── UPDATE MODAL ── */
+    .takt-update-overlay {
+      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(15,23,42,0.65); backdrop-filter: blur(6px);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 30; border-radius: 20px;
+      animation: update-fade-in 0.3s ease;
+    }
+    @keyframes update-fade-in { from { opacity: 0; } to { opacity: 1; } }
+    .takt-update-box {
+      background: white; border-radius: 22px; padding: 36px 32px 28px;
+      width: 400px; text-align: center;
+      box-shadow: 0 30px 80px rgba(0,0,0,0.25), 0 0 0 1px rgba(99,102,241,0.15);
+      border: 2px solid #e0e7ff;
+      animation: update-pop 0.35s cubic-bezier(0.34,1.56,0.64,1);
+    }
+    @keyframes update-pop { from { opacity: 0; transform: scale(0.85) translateY(20px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+    .takt-update-icon { font-size: 44px; margin-bottom: 12px; animation: rocket-bob 1.5s ease-in-out infinite; }
+    @keyframes rocket-bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+    .takt-update-title { font-size: 22px; font-weight: 800; color: #1e293b; margin-bottom: 14px; letter-spacing: -0.5px; }
+    .takt-update-versions {
+      display: inline-flex; align-items: center; gap: 10px;
+      background: #f1f5f9; border-radius: 12px; padding: 8px 18px;
+      margin-bottom: 18px;
+    }
+    .takt-update-ver-old { font-size: 15px; font-weight: 700; color: #94a3b8; font-family: 'JetBrains Mono','SF Mono',monospace; text-decoration: line-through; }
+    .takt-update-ver-arrow { font-size: 18px; color: #6366f1; font-weight: 800; }
+    .takt-update-ver-new { font-size: 18px; font-weight: 800; color: #6366f1; font-family: 'JetBrains Mono','SF Mono',monospace; }
+    .takt-update-msg { font-size: 13px; color: #64748b; line-height: 1.6; margin-bottom: 20px; }
+    .takt-update-steps { display: flex; flex-direction: column; gap: 8px; margin-bottom: 24px; text-align: left; }
+    .takt-update-step { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 600; color: #334155; }
+    .takt-update-step-num { width: 22px; height: 22px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; font-size: 11px; font-weight: 800; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .takt-update-btns { display: flex; gap: 10px; }
+    .takt-update-skip { flex: 1; padding: 11px; border-radius: 10px; border: 2px solid #e2e8f0; background: white; color: #64748b; font-size: 13px; font-weight: 700; cursor: pointer; transition: all 0.2s; font-family: 'Inter',sans-serif; }
+    .takt-update-skip:hover { background: #f1f5f9; border-color: #cbd5e1; }
+    .takt-update-go { flex: 2; padding: 11px; border-radius: 10px; border: none; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; font-size: 14px; font-weight: 800; cursor: pointer; transition: all 0.2s; font-family: 'Inter',sans-serif; letter-spacing: 0.2px; }
+    .takt-update-go:hover { box-shadow: 0 6px 20px rgba(99,102,241,0.45); transform: translateY(-1px); }
   `;
   document.head.appendChild(styles);
 
@@ -1698,7 +1808,8 @@
       panel.style.left = '50%'; panel.style.top = '50%';
       panel.style.transform = 'translate(-50%, -50%) scale(1)';
       reloadCurrentView();
-      startAutoSync(); // ← Start polling when panel opens
+      startAutoSync();      // ← Start polling when panel opens
+      checkForUpdate();     // ← Check GitHub for new version on every open
     } else {
       panel.classList.remove('open'); backdrop.classList.remove('open');
       stopAutoSync(); // ← Stop polling when panel closes
