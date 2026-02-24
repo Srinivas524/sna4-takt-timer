@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SNA4 Takt Time Study Timer
 // @namespace    http://tampermonkey.net/
-// @version      11.2
+// @version      11.3
 // @description  Floating time study timer with SharePoint database
 // @match        https://ramdos.org/*
 // @match        https://fclm-portal.amazon.com/*
@@ -23,7 +23,7 @@
     processAvgs: { guid: '5768158e-ac61-49fe-823f-3306a3767d67', type: null }
   };
   var SP_READY = false;
-  var CURRENT_VERSION = '11.2';
+  var CURRENT_VERSION = '11.3';
 
   // ── VERSION CHECK ─────────────────────────────────────
   var GITHUB_RAW_URL = 'https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js';
@@ -347,7 +347,8 @@
   }
 
   // ── OBSERVATIONS CRUD ──────────────────────────────────
-  function spSaveObservation(obsData) {
+  // Raw save - used by offline queue and retry
+  function spSaveObservationDirect(obsData) {
     var key = buildObsKey(obsData.login, obsData.date, obsData.process, obsData.sub, obsData.setNum, obsData.obsNum);
     var data = {
       'AssociateLogin': obsData.login, 'ObsDate': dateForSP(obsData.date),
@@ -362,6 +363,25 @@
       dataCache.clear();
       return recalcDailySummary(obsData.login, obsData.date, obsData.process, obsData.sub).then(function () { return result; });
     });
+  }
+
+  // Optimistic wrapper: 3 retries with backoff, then offline queue
+  function spSaveObservation(obsData) {
+    var attempt = 0;
+    function tryIt() {
+      attempt++;
+      return spSaveObservationDirect(obsData).catch(function (err) {
+        if (attempt < 3) {
+          return new Promise(function (res, rej) {
+            setTimeout(function () { tryIt().then(res).catch(rej); }, attempt * 2000);
+          });
+        }
+        if (!navigator.onLine) { enqueueOffline(obsData); }
+        else { showToast('[WARN] Save failed after 3 attempts - check SharePoint'); }
+        throw err;
+      });
+    }
+    return tryIt();
   }
 
   function loadObservationsForDay(login, date, process, sub) {
@@ -647,6 +667,54 @@
     associates: [], sets: {}, daySummaries: {}, processAvg: null, historicalAvg: null, dailySummary: null
   };
   var auditorInfo = { name: '', login: '' };
+
+  // -- UI PREFERENCES --------------------------------------------------
+  var uiPrefs = { darkMode: false, compactMode: false };
+  function loadUiPrefs() {
+    try { var raw = localStorage.getItem('sna4_ui_prefs'); if (raw) { var p = JSON.parse(raw); uiPrefs.darkMode = !!p.darkMode; uiPrefs.compactMode = !!p.compactMode; } } catch (e) {}
+  }
+  function saveUiPrefs() { try { localStorage.setItem('sna4_ui_prefs', JSON.stringify(uiPrefs)); } catch (e) {} }
+  function applyDarkMode() {
+    if (uiPrefs.darkMode) { panel.classList.add('dark'); document.body.classList.add('takt-dark-body'); }
+    else { panel.classList.remove('dark'); document.body.classList.remove('takt-dark-body'); }
+  }
+  function applyCompactMode() {
+    if (uiPrefs.compactMode) panel.classList.add('compact');
+    else panel.classList.remove('compact');
+  }
+  function toggleDarkMode() { uiPrefs.darkMode = !uiPrefs.darkMode; saveUiPrefs(); applyDarkMode(); renderPanel(); }
+  function toggleCompactMode() { uiPrefs.compactMode = !uiPrefs.compactMode; saveUiPrefs(); applyCompactMode(); renderPanel(); }
+
+  // -- OFFLINE QUEUE ----------------------------------------------------
+  var offlineQueue = [];
+  var offlineRetryTimer = null;
+  function loadOfflineQueue() {
+    try { var raw = localStorage.getItem('sna4_offline_queue'); if (raw) offlineQueue = JSON.parse(raw) || []; } catch(e) { offlineQueue = []; }
+  }
+  function saveOfflineQueue() { try { localStorage.setItem('sna4_offline_queue', JSON.stringify(offlineQueue)); } catch(e) {} }
+  function enqueueOffline(obsData) {
+    offlineQueue.push({ obsData: obsData, ts: Date.now(), attempts: 0 });
+    saveOfflineQueue();
+    showToast('[OFFLINE] Saved locally - will sync when reconnected');
+    scheduleOfflineRetry();
+  }
+  function scheduleOfflineRetry() {
+    if (offlineRetryTimer) return;
+    offlineRetryTimer = setInterval(flushOfflineQueue, 15000);
+  }
+  function flushOfflineQueue() {
+    if (offlineQueue.length === 0) { clearInterval(offlineRetryTimer); offlineRetryTimer = null; return; }
+    if (!navigator.onLine) return;
+    var item = offlineQueue[0];
+    item.attempts++;
+    spSaveObservationDirect(item.obsData).then(function () {
+      offlineQueue.shift(); saveOfflineQueue();
+      if (offlineQueue.length === 0) { clearInterval(offlineRetryTimer); offlineRetryTimer = null; showToast('Offline data synced to SharePoint'); }
+      else flushOfflineQueue();
+    }).catch(function () {
+      if (item.attempts > 10) { offlineQueue.shift(); saveOfflineQueue(); showToast('[WARN] Observation failed to sync after 10 attempts'); }
+    });
+  }
 
   // ── HELPERS ────────────────────────────────────────────
   function getCurrentAssociate() {
@@ -1011,6 +1079,118 @@
     .takt-add-submit:hover { box-shadow: 0 4px 15px rgba(34,197,94,0.4); }
     .takt-add-submit:disabled { opacity: 0.5; cursor: not-allowed; }
 
+    /* -- FASTEST / SLOWEST OBS HIGHLIGHT -- */
+    .obs-fastest { box-shadow: inset 0 0 0 3px #f59e0b !important; position: relative; }
+    .obs-fastest::before { content: ''; position: absolute; inset: 0; background: rgba(245,158,11,0.08); pointer-events: none; }
+    .obs-slowest { box-shadow: inset 0 0 0 3px #94a3b8 !important; position: relative; }
+    .obs-slowest::before { content: ''; position: absolute; inset: 0; background: rgba(148,163,184,0.08); pointer-events: none; }
+
+    /* -- COMPACT MODE -- */
+    #takt-panel.compact .takt-auditor-bar { padding: 4px 16px; }
+    #takt-panel.compact .takt-auditor-input { padding: 3px 8px; font-size: 11px; }
+    #takt-panel.compact .takt-associate-bar { padding: 6px 16px; }
+    #takt-panel.compact .takt-assoc-card { padding: 4px 10px; }
+    #takt-panel.compact .takt-assoc-avatar { width: 28px; height: 28px; font-size: 12px; }
+    #takt-panel.compact .takt-assoc-name { font-size: 12px; }
+    #takt-panel.compact .takt-day-nav { padding: 5px 16px; }
+    #takt-panel.compact .takt-set-bar { padding: 5px 16px; }
+    #takt-panel.compact .takt-process-bar { padding: 6px 16px; }
+    #takt-panel.compact .takt-control-bar { padding: 6px 16px; }
+    #takt-panel.compact .takt-coaching-section { padding: 6px 16px; }
+    #takt-panel.compact .takt-footer { padding: 6px 16px; }
+    #takt-panel.compact .takt-table thead th { padding: 5px 10px; font-size: 9px; }
+    #takt-panel.compact .takt-table tbody td { padding: 4px 10px; font-size: 11px; }
+    #takt-panel.compact .takt-header { padding: 10px 16px; }
+    #takt-panel.compact .takt-assoc-total-avg { padding: 4px 8px; min-width: 60px; }
+    #takt-panel.compact .takt-assoc-total-avg-value { font-size: 13px; }
+
+    /* -- DARK MODE -- */
+    #takt-panel.dark { background: #0f172a; color: #e2e8f0; box-shadow: 0 25px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(99,102,241,0.2); }
+    #takt-panel.dark .takt-day-nav { background: linear-gradient(135deg,#1e293b,#172035); border-color: #334155; }
+    #takt-panel.dark .takt-day-label { color: #cbd5e1; }
+    #takt-panel.dark .takt-day-btn { background: #1e293b; border-color: #334155; color: #7dd3fc; }
+    #takt-panel.dark .takt-day-btn:hover { background: #0284c7; border-color: #0284c7; }
+    #takt-panel.dark .takt-day-today-btn { background: #1e293b; border-color: #334155; color: #7dd3fc; }
+    #takt-panel.dark .takt-day-today-btn.is-today { background: #0284c7; color: white; }
+    #takt-panel.dark .takt-auditor-bar { background: #1e293b; border-color: #334155; }
+    #takt-panel.dark .takt-auditor-label { color: #94a3b8; }
+    #takt-panel.dark .takt-auditor-input { background: #0f172a; border-color: #334155; color: #e2e8f0; }
+    #takt-panel.dark .takt-auditor-input:focus { border-color: #6366f1; }
+    #takt-panel.dark .takt-associate-bar { background: linear-gradient(135deg,#0f2318,#0d1f14); border-color: #166534; }
+    #takt-panel.dark .takt-assoc-card { background: #1e293b; border-color: #166534; }
+    #takt-panel.dark .takt-assoc-name { color: #f1f5f9; }
+    #takt-panel.dark .takt-assoc-login { color: #94a3b8; }
+    #takt-panel.dark .takt-assoc-empty-card { background: #1e293b; border-color: #334155; color: #64748b; }
+    #takt-panel.dark .takt-assoc-nav-btn { background: #1e293b; border-color: #166534; color: #4ade80; }
+    #takt-panel.dark .takt-assoc-action-btn { background: #1e293b; border-color: #166534; color: #4ade80; }
+    #takt-panel.dark .takt-assoc-action-btn:hover { background: #166534; color: white; }
+    #takt-panel.dark .takt-assoc-action-btn.primary { background: linear-gradient(135deg,#16a34a,#15803d); }
+    #takt-panel.dark .takt-assoc-total-avg { background: #0f2318; border-color: #166534; }
+    #takt-panel.dark .takt-assoc-total-avg.over { background: #2d1010; border-color: #7f1d1d; }
+    #takt-panel.dark .takt-assoc-delete-btn { background: #1e293b; border-color: #7f1d1d; color: #f87171; }
+    #takt-panel.dark .takt-set-bar { background: #1a0d1f; border-color: #6b21a8; }
+    #takt-panel.dark .takt-set-label { color: #c084fc; }
+    #takt-panel.dark .takt-set-pill { background: #1e293b; border-color: #6b21a8; color: #c084fc; }
+    #takt-panel.dark .takt-set-pill.selected { background: #6b21a8; color: white; }
+    #takt-panel.dark .takt-set-pill.locked { background: #0f2318; border-color: #166534; color: #4ade80; }
+    #takt-panel.dark .takt-set-add-btn { background: #1e293b; border-color: #6b21a8; color: #c084fc; }
+    #takt-panel.dark .takt-process-bar { background: #1a1f3a; border-color: #334155; }
+    #takt-panel.dark .takt-back-btn { background: #1e293b; border-color: #334155; color: #818cf8; }
+    #takt-panel.dark .takt-control-bar { background: #0f172a; border-color: #1e293b; }
+    #takt-panel.dark .takt-obs-pill { background: #1e293b; border-color: #334155; color: #94a3b8; }
+    #takt-panel.dark .takt-obs-pill:hover { background: #1e2a4a; border-color: #6366f1; color: #818cf8; }
+    #takt-panel.dark .takt-obs-pill.selected { background: #6366f1; border-color: #6366f1; color: white; }
+    #takt-panel.dark .takt-obs-pill.completed { background: #0f2318; border-color: #166534; color: #4ade80; }
+    #takt-panel.dark .takt-timer-bar { background: #0f172a; border-color: #1e293b; }
+    #takt-panel.dark .takt-timer-task-label { background: #1e293b; color: #94a3b8; }
+    #takt-panel.dark .takt-table-wrap { background: #0f172a; }
+    #takt-panel.dark .takt-table thead th { background: #1e293b; color: #64748b; border-color: #334155; }
+    #takt-panel.dark .takt-table thead th.obs-header.active { background: #1e2a4a; color: #818cf8; }
+    #takt-panel.dark .takt-table thead th.avg-header { background: #241f0a; color: #d97706; }
+    #takt-panel.dark .takt-table thead th.pavg-header { background: #0a1f10; color: #4ade80; }
+    #takt-panel.dark .takt-table tbody tr:hover { background: #1a2234; }
+    #takt-panel.dark .takt-table tbody tr.current-task-row { background: #1e2a4a; }
+    #takt-panel.dark .takt-table tbody td { color: #cbd5e1; border-color: #1e293b; }
+    #takt-panel.dark .takt-table tbody td:first-child { color: #e2e8f0; }
+    #takt-panel.dark .takt-table tbody td.target-col { background: #161d2d; color: #475569; }
+    #takt-panel.dark .takt-table tbody td.obs-cell.good { color: #4ade80; background: #0a2010; }
+    #takt-panel.dark .takt-table tbody td.obs-cell.over { color: #f87171; background: #2d1010; }
+    #takt-panel.dark .takt-table tbody td.obs-cell.no-target { color: #f1f5f9; background: #1e2218; }
+    #takt-panel.dark .takt-table tbody td.obs-cell.empty { color: #334155; }
+    #takt-panel.dark .takt-table tbody td.obs-cell.active-col { background: #1e2a4a; }
+    #takt-panel.dark .takt-table tbody td.avg-cell { background: #1e1a08; color: #d97706; }
+    #takt-panel.dark .takt-table tbody td.avg-cell.good { color: #4ade80; background: #0a200d; }
+    #takt-panel.dark .takt-table tbody td.avg-cell.over { color: #f87171; background: #2d1010; }
+    #takt-panel.dark .takt-table tbody td.pavg-cell { background: #0a1f10; color: #4ade80; }
+    #takt-panel.dark .takt-table tbody tr.row-total { background: #161d2d; }
+    #takt-panel.dark .takt-table tbody tr.row-total td { color: #f1f5f9; }
+    #takt-panel.dark .takt-table tbody tr.row-total td.obs-cell.good { color: #4ade80; background: #0a2010; }
+    #takt-panel.dark .takt-table tbody tr.row-total td.obs-cell.over { color: #f87171; background: #2d1010; }
+    #takt-panel.dark .takt-coaching-section { background: #1e1a08; border-color: #44360a; }
+    #takt-panel.dark .takt-coaching-title { color: #d97706; }
+    #takt-panel.dark .takt-coaching-textarea { background: #0f172a; border-color: #44360a; color: #e2e8f0; }
+    #takt-panel.dark .takt-progress-section { background: #0f172a; border-color: #1e293b; }
+    #takt-panel.dark .takt-footer { background: #0a0f1e; border-color: #1e293b; }
+    #takt-panel.dark .takt-footer-btn { background: #1e293b; border-color: #334155; color: #94a3b8; }
+    #takt-panel.dark .takt-footer-btn:hover { border-color: #6366f1; color: #818cf8; background: #1e2a4a; }
+    #takt-panel.dark .takt-footer-status { color: #475569; }
+    #takt-panel.dark .takt-loading-bar { background: #1e293b; }
+    #takt-panel.dark .takt-summary-wrap { background: #0f172a; }
+    #takt-panel.dark .takt-summary-title { color: #475569; }
+    #takt-panel.dark .takt-summary-parent-row td { color: #f1f5f9; border-color: #1e293b; }
+    #takt-panel.dark .takt-summary-row:hover { background: #1e2a4a; }
+    #takt-panel.dark .takt-summary-row.done { background: #0a1f10; }
+    #takt-panel.dark .takt-summary-row.done:hover { background: #0d2a15; }
+    #takt-panel.dark .takt-summary-sub-label { color: #94a3b8; }
+    #takt-panel.dark .takt-summary-bar-bg { background: #1e293b; }
+    #takt-panel.dark .takt-summary-avg { color: #64748b; }
+    #takt-panel.dark .takt-summary-avg.good { color: #4ade80; }
+    #takt-panel.dark .takt-summary-avg.over { color: #f87171; }
+    #takt-panel.dark .takt-task-avg-chip.neutral { background: #1e293b; color: #64748b; border-color: #334155; }
+    #takt-panel.dark .takt-task-avg-chip.good { background: #0a2010; color: #4ade80; border-color: #166534; }
+    #takt-panel.dark .takt-task-avg-chip.over { background: #2d1010; color: #f87171; border-color: #7f1d1d; }
+    .takt-mode-btn { font-size: 10px !important; font-weight: 800 !important; letter-spacing: 0.5px; min-width: 30px; }
+
     /* ── UPDATE MODAL ── */
     .takt-update-overlay {
       position: absolute; top: 0; left: 0; right: 0; bottom: 0;
@@ -1082,6 +1262,8 @@
       + '<div class="takt-header-subtitle">SNA4 — ' + escapeHtml(subtitlePath) + '</div></div></div>'
       + '<div class="takt-header-actions">'
       + '<div id="takt-sync-dot" title="Auto-sync active (30s)"></div>'
+      + '<button class="takt-header-btn takt-mode-btn" id="takt-toggle-compact" title="Toggle compact mode">' + (uiPrefs.compactMode ? '[+]' : '[-]') + '</button>'
+      + '<button class="takt-header-btn takt-mode-btn" id="takt-toggle-dark" title="Toggle dark mode">' + (uiPrefs.darkMode ? 'LT' : 'DK') + '</button>'
       + '<button class="takt-header-btn" id="takt-minimize" title="Minimize">─</button>'
       + '<button class="takt-header-btn" id="takt-close" title="Close">✕</button></div></div>';
 
@@ -1391,13 +1573,23 @@
     if (hasProcess) tableRowsHTML += '<td class="pavg-cell">—</td>';
     tableRowsHTML += '</tr>';
 
-    // Total row
+    // Total row - fastest (gold) / slowest (grey) highlight
+    var completedTotals = [];
+    for (var fx = 1; fx <= NUM_OBS; fx++) { if (observations[fx] && observations[fx].totalTime !== null) completedTotals.push({ obs: fx, time: observations[fx].totalTime }); }
+    var fastestObs = -1, slowestObs = -1;
+    if (completedTotals.length >= 2) {
+      completedTotals.sort(function(a,b){return a.time-b.time;});
+      fastestObs = completedTotals[0].obs;
+      slowestObs = completedTotals[completedTotals.length-1].obs;
+    }
     tableRowsHTML += '<tr class="row-total"><td style="padding-left:24px;">📊 Total</td><td class="target-col" style="font-weight:800;color:#1e293b;">' + (showTargets ? TOTAL_TARGET + 's' : 'N/A') + '</td>';
     for (var tt = 1; tt <= NUM_OBS; tt++) {
       var ttObs = observations[tt];
       if (ttObs && ttObs.totalTime !== null) {
         var ttCls = showTargets ? (ttObs.totalTime <= TOTAL_TARGET ? 'good' : 'over') : 'no-target';
-        tableRowsHTML += '<td class="obs-cell ' + ttCls + '">' + ttObs.totalTime + 's</td>';
+        var hlCls = tt === fastestObs ? ' obs-fastest' : tt === slowestObs ? ' obs-slowest' : '';
+        var hlIcon = tt === fastestObs ? ' 🥇' : tt === slowestObs ? ' 🐢' : '';
+        tableRowsHTML += '<td class="obs-cell ' + ttCls + hlCls + '">' + ttObs.totalTime + 's' + hlIcon + '</td>';
       } else { tableRowsHTML += '<td class="obs-cell empty">—</td>'; }
     }
     if (hasDaily) {
@@ -1438,6 +1630,9 @@
     var closeBtn = document.getElementById('takt-close'), minBtn = document.getElementById('takt-minimize');
     if (closeBtn) closeBtn.onclick = togglePanel;
     if (minBtn) minBtn.onclick = togglePanel;
+    var darkBtn = document.getElementById('takt-toggle-dark'), compactBtn = document.getElementById('takt-toggle-compact');
+    if (darkBtn) darkBtn.onclick = toggleDarkMode;
+    if (compactBtn) compactBtn.onclick = toggleCompactMode;
     var audName = document.getElementById('takt-auditor-name'), audLogin = document.getElementById('takt-auditor-login');
     if (audName) audName.oninput = function (e) { auditorInfo.name = e.target.value; saveAuditorLocally(); };
     if (audLogin) audLogin.oninput = function (e) { auditorInfo.login = e.target.value; saveAuditorLocally(); };
@@ -1538,7 +1733,8 @@
         for (var oi = 1; oi <= NUM_OBS; oi++) { var o = currentSetData.observations[oi]; if (o && o.totalTime !== null) doneCount++; }
         if (doneCount >= 5) currentSetData.isComplete = true;
 
-        state.loading = true; renderPanel();
+        // Optimistic: render immediately, sync background
+        renderPanel();
         spSaveObservation({
           login: assoc.login, date: state.currentDate,
           process: state.selectedProcess, sub: state.selectedSubProcess,
@@ -1547,16 +1743,14 @@
           totalTime: obs.totalTime, targetTotal: TOTAL_TARGET,
           auditorLogin: auditorInfo.login, auditorName: auditorInfo.name
         }).then(function () {
-          state.loading = false;
           return Promise.all([
             loadDailySummary(assoc.login, state.currentDate, state.selectedProcess, state.selectedSubProcess),
             loadProcessAverage(state.selectedProcess, state.selectedSubProcess, state.currentDate)
           ]);
         }).then(function (results) {
-          state.dailySummary = results[0]; state.processAvg = results[1]; renderPanel();
-        }).catch(function (err) {
-          state.loading = false; console.warn('Save failed:', err); showToast('⚠ Save failed — retrying...'); renderPanel();
-        });
+          state.dailySummary = results[0]; state.processAvg = results[1];
+          if (!state.isRunning) renderPanel();
+        }).catch(function (err) { console.warn('Background sync:', err); });
         var diff = obs.totalTime - TOTAL_TARGET;
         if (showTargets) showToast(diff <= 0 ? '✅ Obs ' + state.selectedObs + ' complete! ' + Math.abs(diff) + 's under target' : '⚠️ Obs ' + state.selectedObs + ' complete! ' + diff + 's over target');
         else showToast('✅ Obs ' + state.selectedObs + ' complete! ' + obs.totalTime + 's total');
@@ -1807,9 +2001,10 @@
       panel.classList.add('open'); backdrop.classList.add('open');
       panel.style.left = '50%'; panel.style.top = '50%';
       panel.style.transform = 'translate(-50%, -50%) scale(1)';
+      applyDarkMode(); applyCompactMode();
       reloadCurrentView();
-      startAutoSync();      // ← Start polling when panel opens
-      checkForUpdate();     // ← Check GitHub for new version on every open
+      startAutoSync();
+      checkForUpdate();
     } else {
       panel.classList.remove('open'); backdrop.classList.remove('open');
       stopAutoSync(); // ← Stop polling when panel closes
@@ -1836,6 +2031,8 @@
 
   // ── INIT ───────────────────────────────────────────────
   loadAuditorLocally();
+  loadUiPrefs();
+  loadOfflineQueue();
   initSharePoint().then(function (ready) {
     if (ready) { console.log('✅ SNA4 Takt Timer v' + CURRENT_VERSION + ' — SharePoint connected'); return loadAllAssociates(); }
     else { console.warn('⚠ SharePoint offline'); return []; }
