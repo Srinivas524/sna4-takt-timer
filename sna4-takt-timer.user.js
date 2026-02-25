@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SNA4 Takt Time Study Timer
 // @namespace    http://tampermonkey.net/
-// @version      10.1
+// @version      10.2
 // @description  Floating time study timer with associate management and Google Sheets sync
 // @match        https://ramdos.org/*
 // @match        https://fclm-portal.amazon.com/*
@@ -19,7 +19,7 @@
   // GOOGLE SHEETS API
   // ═══════════════════════════════════════════════════════
   const API_URL = 'https://script.google.com/macros/s/AKfycbxVHsKAFccb80Pl6FhOsuMTcAEwZACFVPlxgwjb56UueO-_F_Q6xe-pYqJsOy4UUxni/exec';
-  const CURRENT_VERSION = '10.1';
+  const CURRENT_VERSION = '10.2';
   const INSTALL_URL = 'https://raw.githubusercontent.com/Srinivas524/sna4-takt-timer/main/sna4-takt-timer.user.js';
 
   function checkForUpdate() {
@@ -27,45 +27,110 @@
       if (!data || !data.latestVersion) return;
       const latest = data.latestVersion.toString().trim();
       const current = CURRENT_VERSION.toString().trim();
-
       if (latest === current) {
         localStorage.removeItem('sna4_dismissed_version');
         return;
       }
-
       const dismissed = localStorage.getItem('sna4_dismissed_version');
       if (dismissed === latest) return;
-
-      showUpdateBanner(latest);
+      showUpdateBlocker(latest);
     }).catch(() => {});
   }
 
-  function showUpdateBanner(latestVersion) {
-    const existing = document.getElementById('takt-update-banner');
+  function showUpdateBlocker(latestVersion) {
+    const existing = document.getElementById('takt-update-blocker');
     if (existing) return;
-    const banner = document.createElement('div');
-    banner.id = 'takt-update-banner';
-    banner.style.cssText = `
-      position: fixed; top: 0; left: 0; right: 0; z-index: 9999999;
-      background: linear-gradient(135deg, #f59e0b, #d97706);
-      color: white; font-family: 'Inter', sans-serif;
+
+    const blocker = document.createElement('div');
+    blocker.id = 'takt-update-blocker';
+    blocker.style.cssText = `
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 99999999;
+      background: rgba(15,23,42,0.6); backdrop-filter: blur(8px);
       display: flex; align-items: center; justify-content: center;
-      gap: 12px; padding: 10px 24px; font-size: 13px; font-weight: 700;
-      box-shadow: 0 4px 20px rgba(245,158,11,0.4); cursor: pointer;
+      font-family: 'Inter', sans-serif; animation: takt-blocker-in 0.3s ease;
     `;
-    banner.innerHTML = `
-      <span>🚀 New version available (v${latestVersion}) — click here to update</span>
-      <span style="background:rgba(255,255,255,0.25);padding:3px 12px;border-radius:6px;font-size:11px;">Click to Install</span>
-      <span id="takt-banner-close" style="margin-left:8px;opacity:0.7;font-size:16px;cursor:pointer;">✕</span>
+    blocker.innerHTML = `
+      <style>
+        @keyframes takt-blocker-in { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes takt-blocker-card-in { from { opacity: 0; transform: scale(0.9) translateY(20px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+      </style>
+      <div style="
+        background: white; border-radius: 24px; padding: 40px; width: 420px; max-width: 92vw;
+        box-shadow: 0 25px 80px rgba(0,0,0,0.25); text-align: center;
+        animation: takt-blocker-card-in 0.35s ease;
+      ">
+        <div style="
+          width: 72px; height: 72px; border-radius: 20px; margin: 0 auto 20px;
+          background: linear-gradient(135deg, #6366f1, #8b5cf6);
+          display: flex; align-items: center; justify-content: center; font-size: 36px;
+        ">🚀</div>
+        <div style="font-size: 22px; font-weight: 800; color: #0f172a; margin-bottom: 6px;">
+          Update Available
+        </div>
+        <div style="font-size: 14px; color: #64748b; margin-bottom: 24px; line-height: 1.6;">
+          A new version of <strong style="color:#6366f1;">Takt Time Study</strong> is ready.
+        </div>
+        <div style="
+          display: flex; align-items: center; justify-content: center; gap: 12px;
+          margin-bottom: 28px; padding: 14px 20px; background: #f8fafc;
+          border-radius: 14px; border: 1.5px solid #e2e8f0;
+        ">
+          <div style="text-align: center;">
+            <div style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.8px;">Current</div>
+            <div style="font-size: 18px; font-weight: 800; color: #94a3b8; margin-top: 2px;">v${CURRENT_VERSION}</div>
+          </div>
+          <div style="font-size: 24px; color: #c7d2fe;">→</div>
+          <div style="text-align: center;">
+            <div style="font-size: 11px; font-weight: 700; color: #16a34a; text-transform: uppercase; letter-spacing: 0.8px;">New</div>
+            <div style="font-size: 18px; font-weight: 800; color: #16a34a; margin-top: 2px;">v${latestVersion}</div>
+          </div>
+        </div>
+        <div style="display: flex; gap: 10px;">
+          <button id="takt-update-later" style="
+            flex: 1; padding: 14px; border-radius: 12px; border: 2px solid #e2e8f0;
+            background: white; color: #64748b; font-size: 14px; font-weight: 700;
+            cursor: pointer; font-family: 'Inter', sans-serif; transition: all 0.2s;
+          ">Later</button>
+          <button id="takt-update-now" style="
+            flex: 2; padding: 14px; border-radius: 12px; border: none;
+            background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white;
+            font-size: 14px; font-weight: 700; cursor: pointer;
+            font-family: 'Inter', sans-serif; transition: all 0.2s;
+            box-shadow: 0 4px 15px rgba(99,102,241,0.4);
+          ">Update Now →</button>
+        </div>
+        <div style="margin-top: 16px; font-size: 11px; color: #94a3b8;">
+          Your data is safe — updates won't affect saved observations.
+        </div>
+      </div>
     `;
-    document.body.appendChild(banner);
-    banner.onclick = (e) => {
-      if (e.target.id === 'takt-banner-close') {
-        localStorage.setItem('sna4_dismissed_version', latestVersion);
-        banner.remove();
-        return;
-      }
+    document.body.appendChild(blocker);
+
+    document.getElementById('takt-update-now').onclick = () => {
       window.open(INSTALL_URL, '_blank');
+      blocker.remove();
+    };
+    document.getElementById('takt-update-later').onclick = () => {
+      localStorage.setItem('sna4_dismissed_version', latestVersion);
+      blocker.remove();
+    };
+    document.getElementById('takt-update-later').onmouseenter = (e) => {
+      e.target.style.borderColor = '#6366f1';
+      e.target.style.color = '#6366f1';
+      e.target.style.background = '#eef2ff';
+    };
+    document.getElementById('takt-update-later').onmouseleave = (e) => {
+      e.target.style.borderColor = '#e2e8f0';
+      e.target.style.color = '#64748b';
+      e.target.style.background = 'white';
+    };
+    document.getElementById('takt-update-now').onmouseenter = (e) => {
+      e.target.style.transform = 'translateY(-1px)';
+      e.target.style.boxShadow = '0 8px 25px rgba(99,102,241,0.5)';
+    };
+    document.getElementById('takt-update-now').onmouseleave = (e) => {
+      e.target.style.transform = 'translateY(0)';
+      e.target.style.boxShadow = '0 4px 15px rgba(99,102,241,0.4)';
     };
   }
 
@@ -77,11 +142,7 @@
         headers: { 'Content-Type': 'text/plain' },
         data: JSON.stringify(payload),
         onload: (res) => {
-          try {
-            resolve(JSON.parse(res.responseText));
-          } catch (e) {
-            reject(e);
-          }
+          try { resolve(JSON.parse(res.responseText)); } catch (e) { reject(e); }
         },
         onerror: (err) => reject(err)
       });
@@ -94,11 +155,7 @@
         method: 'GET',
         url: API_URL + '?action=' + action,
         onload: (res) => {
-          try {
-            resolve(JSON.parse(res.responseText));
-          } catch (e) {
-            reject(e);
-          }
+          try { resolve(JSON.parse(res.responseText)); } catch (e) { reject(e); }
         },
         onerror: (err) => reject(err)
       });
@@ -194,7 +251,8 @@
   let appData = {
     auditorName: '',
     auditorLogin: '',
-    associates: []
+    associates: [],
+    customTargets: {}
   };
 
   let state = {
@@ -214,13 +272,13 @@
     associateSearchQuery: '',
     showAddForm: false,
     syncStatus: 'idle',
-    lastSynced: null
+    lastSynced: null,
+    coachingExpanded: false
   };
 
   // ═══════════════════════════════════════════════════════
   // PERSISTENCE — LOCAL + SHEETS
   // ═══════════════════════════════════════════════════════
-
   function saveAuditorLocally() {
     try {
       localStorage.setItem('sna4_auditor', JSON.stringify({
@@ -250,29 +308,27 @@
 
   function loadData() {
     loadAuditorLocally();
-
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed.associates) appData.associates = parsed.associates;
+        if (parsed.customTargets) appData.customTargets = parsed.customTargets;
         if (appData.associates.length > 0) {
           state.currentAssociateIndex = 0;
         }
       }
     } catch (e) { console.warn('Local load failed:', e); }
-
     syncFromSheets();
   }
 
   function syncToSheets() {
     state.syncStatus = 'syncing';
     updateSyncBadge();
-
     const payload = {
-      associates: appData.associates
+      associates: appData.associates,
+      customTargets: appData.customTargets
     };
-
     callAPI({ action: 'saveAll', data: payload, _k: 'SNA4_AMAZ0N_2026' })
       .then(() => {
         state.syncStatus = 'synced';
@@ -289,16 +345,18 @@
   function syncFromSheets() {
     state.syncStatus = 'syncing';
     updateSyncBadge();
-
     fetchAPI('getAll')
       .then((data) => {
         if (data && data.associates && data.associates.length > 0) {
           appData.associates = data.associates;
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
           if (appData.associates.length > 0 && state.currentAssociateIndex < 0) {
             state.currentAssociateIndex = 0;
           }
         }
+        if (data && data.customTargets) {
+          appData.customTargets = data.customTargets;
+        }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
         state.syncStatus = 'synced';
         state.lastSynced = new Date().toLocaleTimeString();
         updateSyncBadge();
@@ -343,6 +401,55 @@
     return `${state.selectedProcess}__${state.selectedSubProcess}`;
   }
 
+  function getDefaultConfig() {
+    return PROCESS_PATHS[state.selectedProcess][state.selectedSubProcess];
+  }
+
+  function getConfig() {
+    const key = storeKey();
+    const defaultConfig = getDefaultConfig();
+
+    if (appData.customTargets && appData.customTargets[key]) {
+      const customTaskTargets = appData.customTargets[key];
+      const tasks = defaultConfig.tasks.map((t, i) => ({
+        name: t.name,
+        target: (customTaskTargets[i] !== undefined && customTaskTargets[i] !== null)
+          ? customTaskTargets[i]
+          : t.target
+      }));
+      const totalTarget = tasks.reduce((sum, t) => sum + t.target, 0);
+      return {
+        tasks,
+        totalTarget,
+        dockNote: defaultConfig.dockNote || null,
+        isCustomized: true
+      };
+    }
+
+    return { ...defaultConfig, isCustomized: false };
+  }
+
+  function updateTaskTarget(taskIndex, newValue) {
+    const key = storeKey();
+    const defaultConfig = getDefaultConfig();
+
+    if (!appData.customTargets[key]) {
+      appData.customTargets[key] = defaultConfig.tasks.map(t => t.target);
+    }
+
+    appData.customTargets[key][taskIndex] = Math.max(0, parseInt(newValue) || 0);
+    saveData();
+    renderPanel();
+  }
+
+  function resetTargetsToDefault() {
+    const key = storeKey();
+    delete appData.customTargets[key];
+    saveData();
+    renderPanel();
+    showToast('🔄 Targets reset to defaults');
+  }
+
   function ensureObservations() {
     const assoc = getCurrentAssociate();
     if (!assoc) return null;
@@ -357,7 +464,6 @@
   }
 
   function getObs() { return ensureObservations(); }
-  function getConfig() { return PROCESS_PATHS[state.selectedProcess][state.selectedSubProcess]; }
 
   function getDisplaySubProcess() {
     if (!hasSubPaths(state.selectedProcess)) return null;
@@ -849,6 +955,29 @@
 
     .takt-assoc-delete-btn { width: 28px; height: 28px; border-radius: 6px; border: 1.5px solid #fca5a5; background: white; color: #ef4444; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; flex-shrink: 0; }
     .takt-assoc-delete-btn:hover { background: #ef4444; color: white; border-color: #ef4444; }
+
+    .takt-target-input {
+      width: 52px; padding: 3px 4px; border: 1.5px solid transparent; border-radius: 5px;
+      background: transparent; color: #94a3b8; font-size: 11px; font-weight: 600;
+      font-family: 'Inter', sans-serif; text-align: center; outline: none;
+      transition: all 0.2s; -moz-appearance: textfield;
+    }
+    .takt-target-input::-webkit-inner-spin-button,
+    .takt-target-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    .takt-target-input:hover { border-color: #c7d2fe; background: #f8fafc; }
+    .takt-target-input:focus { border-color: #6366f1; background: white; color: #1e293b; box-shadow: 0 0 0 3px rgba(99,102,241,0.15); }
+    .takt-target-input.modified { color: #6366f1; font-weight: 700; background: #eef2ff; border-color: #c7d2fe; }
+    .takt-target-input:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .takt-target-total-display { font-weight: 800; color: #1e293b; font-size: 12px; }
+    .takt-target-total-display.modified { color: #6366f1; }
+
+    .takt-reset-targets-btn {
+      padding: 3px 10px; border-radius: 6px; border: 1.5px solid #c7d2fe;
+      background: white; color: #6366f1; font-size: 10px; font-weight: 700;
+      cursor: pointer; font-family: 'Inter', sans-serif; transition: all 0.2s; white-space: nowrap;
+    }
+    .takt-reset-targets-btn:hover { background: #6366f1; color: white; border-color: #6366f1; }
   `;
   document.head.appendChild(styles);
 
@@ -987,11 +1116,15 @@
         const statusText = isDone ? '✅' : isEmpty ? '0/5' : `${completed}/5 🔄`;
         const subLabel = isDefault ? process : sub;
 
+        // Check if this path has custom targets
+        const hasCustom = appData.customTargets && appData.customTargets[key];
+
         rowsHTML += `
           <tr class="takt-summary-row ${isDone ? 'done' : ''}" data-process="${escapeHtml(process)}" data-sub="${escapeHtml(sub)}">
             <td class="takt-summary-sub-cell">
               <span class="takt-summary-sub-arrow">›</span>
               <span class="takt-summary-sub-label">${escapeHtml(subLabel)}</span>
+              ${hasCustom ? '<span style="font-size:9px;color:#6366f1;font-weight:700;margin-left:4px;">✎ custom</span>' : ''}
             </td>
             <td>
               <div class="takt-summary-progress-wrap">
@@ -1037,6 +1170,7 @@
     const assoc = getCurrentAssociate();
     const hasAssociate = assoc !== null;
     const config = getConfig();
+    const defaultConfig = getDefaultConfig();
     const TASKS = config.tasks;
     const TOTAL_TARGET = config.totalTarget;
     const showTargets = hasTargets(config);
@@ -1157,7 +1291,7 @@
       return;
     }
 
-    // ── PROCESS BAR — with dock note inline if applicable ──
+    // ── PROCESS BAR ──
     const dockNote = config.dockNote
       ? `<span class="takt-dock-note">${escapeHtml(config.dockNote)}</span>`
       : '';
@@ -1168,6 +1302,7 @@
         <span class="takt-process-arrow">›</span>
         <span style="font-size:13px;font-weight:800;color:#1e293b;">${state.selectedProcess}</span>
         ${hasSubPaths(state.selectedProcess) ? `<span class="takt-process-arrow">›</span><span style="font-size:13px;font-weight:700;color:#6366f1;">${state.selectedSubProcess}</span>` : ''}
+        ${config.isCustomized ? '<button class="takt-reset-targets-btn" id="takt-reset-targets">↺ Reset Targets</button>' : ''}
         ${dockNote}
       </div>`;
 
@@ -1208,7 +1343,10 @@
         }</div>
       </div>` : `<div class="takt-timer-bar hidden"></div>`;
 
+    // ── TABLE ROWS ──
     let tableRowsHTML = '';
+
+    // Start time row
     tableRowsHTML += `<tr class="row-start-time"><td style="padding-left:24px;">⏰ Start Time</td><td class="target-col">—</td>`;
     for (let i = 1; i <= NUM_OBS; i++) {
       const o = observations[i]; const isA = state.selectedObs === i;
@@ -1216,13 +1354,27 @@
     }
     tableRowsHTML += `</tr>`;
 
+    // Task rows with editable targets
     TASKS.forEach((task, idx) => {
       const isCurrentTask = state.isRunning && state.currentTaskIndex === idx;
+      const defaultTarget = defaultConfig.tasks[idx] ? defaultConfig.tasks[idx].target : 0;
+      const isModified = task.target !== defaultTarget;
+
       tableRowsHTML += `<tr class="${isCurrentTask ? 'current-task-row' : ''}">
         <td style="padding-left:${isCurrentTask ? '20px' : '24px'};">
           <span style="color:#94a3b8;font-size:10px;font-weight:700;margin-right:6px;">${(idx+1).toString().padStart(2,'0')}</span>${task.name}
         </td>
-        <td class="target-col ${task.target > 0 ? '' : 'no-target'}">${task.target > 0 ? task.target+'s' : 'N/A'}</td>`;
+        <td class="target-col">
+          <input type="number"
+            class="takt-target-input ${isModified ? 'modified' : ''}"
+            data-task-index="${idx}"
+            value="${task.target}"
+            min="0"
+            title="Default: ${defaultTarget}s${isModified ? ' (modified)' : ''}"
+            ${state.isRunning ? 'disabled' : ''}
+          />
+        </td>`;
+
       for (let i = 1; i <= NUM_OBS; i++) {
         const o = observations[i]; const isA = state.selectedObs === i; const val = o.tasks[idx];
         if (isCurrentTask && isA) {
@@ -1237,6 +1389,7 @@
       tableRowsHTML += `</tr>`;
     });
 
+    // End time row
     tableRowsHTML += `<tr class="row-end-time"><td style="padding-left:24px;">⏰ End Time</td><td class="target-col">—</td>`;
     for (let i = 1; i <= NUM_OBS; i++) {
       const o = observations[i]; const isA = state.selectedObs === i;
@@ -1244,7 +1397,17 @@
     }
     tableRowsHTML += `</tr>`;
 
-    tableRowsHTML += `<tr class="row-total"><td style="padding-left:24px;">📊 Total</td><td class="target-col" style="font-weight:800;color:#1e293b;">${showTargets ? TOTAL_TARGET+'s' : 'N/A'}</td>`;
+    // Total row with auto-calculated target
+    const defaultTotalTarget = defaultConfig.totalTarget;
+    const totalIsModified = TOTAL_TARGET !== defaultTotalTarget;
+
+    tableRowsHTML += `<tr class="row-total"><td style="padding-left:24px;">📊 Total</td>
+      <td class="target-col">
+        <span class="takt-target-total-display ${totalIsModified ? 'modified' : ''}">
+          ${showTargets ? TOTAL_TARGET + 's' : 'N/A'}
+        </span>
+        ${totalIsModified ? `<div style="font-size:9px;color:#94a3b8;margin-top:2px;">was ${defaultTotalTarget}s</div>` : ''}
+      </td>`;
     for (let i = 1; i <= NUM_OBS; i++) {
       const o = observations[i];
       if (o.total !== null) {
@@ -1382,6 +1545,23 @@
         if (assoc) { assoc.coachingNotes = e.target.value; saveData(); }
       };
     }
+
+    // Editable target inputs
+    panel.querySelectorAll('.takt-target-input').forEach(input => {
+      input.onchange = (e) => {
+        const taskIndex = parseInt(e.target.dataset.taskIndex);
+        const newValue = e.target.value;
+        updateTaskTarget(taskIndex, newValue);
+      };
+      input.onkeydown = (e) => {
+        if (e.key === 'Enter') e.target.blur();
+        if (e.code === 'Space') e.stopPropagation();
+      };
+    });
+
+    // Reset targets button
+    const resetBtn = document.getElementById('takt-reset-targets');
+    if (resetBtn) resetBtn.onclick = resetTargetsToDefault;
   }
 
   // ═══════════════════════════════════════════════════════
@@ -1664,10 +1844,11 @@
 
   function handleClearAll() {
     if (appData.associates.length === 0) return;
-    showConfirm('Clear ALL Data?', 'All associates, observations, and coaching notes will be permanently deleted from Sheets too.', () => {
+    showConfirm('Clear ALL Data?', 'All associates, observations, coaching notes, and custom targets will be permanently deleted from Sheets too.', () => {
       state.isRunning = false; state.currentTaskIndex = -1;
       fab.classList.remove('active'); stopElapsedTimer();
       appData.associates = []; appData.auditorName = ''; appData.auditorLogin = '';
+      appData.customTargets = {};
       state.currentAssociateIndex = -1; state.selectedObs = null;
       updateBadge(); saveData(); renderPanel();
       showToast('🗑 All data cleared');
@@ -1699,6 +1880,7 @@
     const assoc = getCurrentAssociate();
     if (!assoc) return;
     const config = getConfig();
+    const defaultConfig = getDefaultConfig();
     const TASKS = config.tasks;
     const TOTAL_TARGET = config.totalTarget;
     const showTargets = hasTargets(config);
@@ -1710,24 +1892,29 @@
     csv += `Process Path,${state.selectedProcess}\n`;
     if (displaySub) csv += `Sub-Process,${displaySub}\n`;
     if (config.dockNote) csv += `Note,${config.dockNote}\n`;
-    csv += `Total Target,${showTargets ? TOTAL_TARGET+'s' : 'N/A'}\nDate,${new Date().toLocaleDateString()}\n\n`;
-    csv += 'Task,Target';
+    csv += `Total Target,${showTargets ? TOTAL_TARGET+'s' : 'N/A'}`;
+    if (config.isCustomized) csv += ` (customized from ${defaultConfig.totalTarget}s)`;
+    csv += `\nDate,${new Date().toLocaleDateString()}\n\n`;
+    csv += 'Task,Target,Default Target';
     for (let i = 1; i <= NUM_OBS; i++) csv += `,Observation ${i}`;
     csv += '\n';
-    csv += `Start Time,—`;
+    csv += `Start Time,—,—`;
     for (let i = 1; i <= NUM_OBS; i++) csv += `,${observations[i].startTime || ''}`;
     csv += '\n';
     TASKS.forEach((task, idx) => {
-      csv += `"${task.name}",${task.target > 0 ? task.target : 'N/A'}`;
+      const defaultTarget = defaultConfig.tasks[idx] ? defaultConfig.tasks[idx].target : 0;
+      const isModified = task.target !== defaultTarget;
+      csv += `"${task.name}",${task.target > 0 ? task.target : 'N/A'},${defaultTarget > 0 ? defaultTarget : 'N/A'}${isModified ? ' *' : ''}`;
       for (let i = 1; i <= NUM_OBS; i++) { const v = observations[i].tasks[idx]; csv += `,${v !== undefined ? v : ''}`; }
       csv += '\n';
     });
-    csv += `End Time,—`;
+    csv += `End Time,—,—`;
     for (let i = 1; i <= NUM_OBS; i++) csv += `,${observations[i].endTime || ''}`;
     csv += '\n';
-    csv += `Total,${showTargets ? TOTAL_TARGET : 'N/A'}`;
+    csv += `Total,${showTargets ? TOTAL_TARGET : 'N/A'},${defaultConfig.totalTarget > 0 ? defaultConfig.totalTarget : 'N/A'}`;
     for (let i = 1; i <= NUM_OBS; i++) csv += `,${observations[i].total !== null ? observations[i].total : ''}`;
     csv += '\n';
+    if (config.isCustomized) csv += `\n* = Target was customized from default\n`;
     csv += `\nCoaching Notes\n"${assoc.coachingNotes.replace(/"/g, '""')}"\n`;
 
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -1743,6 +1930,7 @@
     const assoc = getCurrentAssociate();
     if (!assoc) return;
     const config = getConfig();
+    const defaultConfig = getDefaultConfig();
     const TASKS = config.tasks;
     const TOTAL_TARGET = config.totalTarget;
     const showTargets = hasTargets(config);
@@ -1752,7 +1940,9 @@
     let text = `TAKT TIME STUDY — SNA4\nAuditor: ${appData.auditorName} (${appData.auditorLogin})\nAssociate: ${assoc.name} (${assoc.login})\nProcess: ${state.selectedProcess}`;
     if (displaySub) text += ` › ${displaySub}`;
     if (config.dockNote) text += `\nNote: ${config.dockNote}`;
-    text += `\nDate: ${new Date().toLocaleString()}\nTarget Total: ${showTargets ? TOTAL_TARGET+'s' : 'N/A'}\n\n`;
+    text += `\nDate: ${new Date().toLocaleString()}\nTarget Total: ${showTargets ? TOTAL_TARGET+'s' : 'N/A'}`;
+    if (config.isCustomized) text += ` (customized from ${defaultConfig.totalTarget}s)`;
+    text += '\n\n';
 
     for (let i = 1; i <= NUM_OBS; i++) {
       const o = observations[i];
@@ -1760,7 +1950,13 @@
       text += `── Observation ${i} ──\nStart: ${o.startTime || 'N/A'}\n`;
       TASKS.forEach((t, idx) => {
         const v = o.tasks[idx];
-        if (v !== undefined) text += `  ${t.target > 0 ? (v <= t.target ? '✅' : '⚠️') : '⏱'} ${t.name}: ${v}s${t.target > 0 ? ' (target: '+t.target+'s)' : ''}\n`;
+        const defaultTarget = defaultConfig.tasks[idx] ? defaultConfig.tasks[idx].target : 0;
+        const isModified = t.target !== defaultTarget;
+        if (v !== undefined) {
+          text += `  ${t.target > 0 ? (v <= t.target ? '✅' : '⚠️') : '⏱'} ${t.name}: ${v}s`;
+          text += t.target > 0 ? ` (target: ${t.target}s${isModified ? ', default: '+defaultTarget+'s' : ''})` : '';
+          text += '\n';
+        }
       });
       text += `End: ${o.endTime || 'N/A'}\nTotal: ${o.total}s${showTargets ? ' (target: '+TOTAL_TARGET+'s)' : ''}\n\n`;
     }
@@ -1817,6 +2013,8 @@
     if (e.key === 'Escape' && state.isOpen) {
       const searchOverlay = document.getElementById('takt-search-overlay');
       const addOverlay = document.querySelector('.takt-add-overlay');
+      const updateBlocker = document.getElementById('takt-update-blocker');
+      if (updateBlocker) return;
       if (searchOverlay) { searchOverlay.remove(); return; }
       if (addOverlay) { addOverlay.remove(); return; }
       if (!state.isRunning) togglePanel();
@@ -1836,5 +2034,5 @@
 
   setInterval(() => { if (state.isOpen && !state.isRunning) syncFromSheets(); }, 60000);
 
-  console.log('✅ SNA4 Takt Time Study Timer v10.1 loaded with Google Sheets sync! Alt+T to open.');
+  console.log('✅ SNA4 Takt Time Study Timer v10.2 loaded with editable targets & Google Sheets sync! Alt+T to open.');
 })();
