@@ -69,7 +69,8 @@
         const code = new TextDecoder().decode(decrypted);
 
         console.log('✅ Decrypted. Executing...');
-        new Function(code)();
+        const fn = new Function('GM_xmlhttpRequest', code);
+        fn(GM_xmlhttpRequest);
 
     } catch (err) {
         console.log('❌ Failed:', err);
